@@ -163,7 +163,7 @@ const makeForm = (value, options = {}) => {
     snapshot: {
       status: options.status || 'ready',
       value,
-      base: value,
+      base: options.base || value,
       user: options.user || {},
       revision: 1,
       writable: options.writable !== false,
@@ -429,11 +429,14 @@ await check('a number typed as a string is sent as a number', async () => {
 })
 
 await check('an override is badged and can be restored with an unset', async () => {
-  const form = makeForm(clone(SERVED), { user: { capture: { enabled: true } } })
+  // The inherited layer says "off"; the profile pins "on": that is an override.
+  const base = clone(SERVED)
+  base.capture.enabled = false
+  const form = makeForm(clone(SERVED), { base, user: { capture: { enabled: true } } })
   const instance = render(form)
   try {
     const badges = () => byClass(row(instance.tree, 'capture.enabled'), 'mg-badge').map(text)
-    assert.equal(badges().length, 1, 'an overridden value is badged even when unchanged')
+    assert.equal(badges().length, 1, 'an overridden value is badged')
     assert.equal(byClass(row(instance.tree, 'capture.enabled'), 'mg-link').length, 0)
 
     instance.act(() => control(instance.tree, 'capture.enabled').props.onClick())
@@ -444,6 +447,24 @@ await check('an override is badged and can be restored with an unset', async () 
     instance.act(() => link.props.onClick())
     await instance.settle()
     assert.deepEqual(form.calls[0].ops, [{ op: 'unset', path: ['capture', 'enabled'] }])
+  } finally {
+    instance.unmount()
+  }
+})
+
+await check('a pinned value that repeats the inherited default is not a customisation', async () => {
+  // One save pins the whole served row, so `user` holds keys nobody changed.
+  const value = clone(SERVED)
+  value.extractor.transport = 'http'
+  const form = makeForm(value, {
+    user: { capture: { enabled: value.capture.enabled }, extractor: { transport: 'http', apiKey: '<set>' } },
+  })
+  const instance = render(form)
+  try {
+    const badges = (field) => byClass(row(instance.tree, field), 'mg-badge').map(text)
+    assert.equal(badges('capture.enabled').length, 0, 'same as the inherited value')
+    assert.equal(badges('extractor.transport').length, 0, 'same as the inherited value')
+    assert.equal(badges('extractor.apiKey').length, 1, 'a secret rides no value, so presence is the signal')
   } finally {
     instance.unmount()
   }

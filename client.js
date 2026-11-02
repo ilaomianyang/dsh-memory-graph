@@ -737,6 +737,7 @@ function createPage(ctx, React) {
     const snapshot = form && typeof form.getSnapshot === 'function' ? safeSnapshot(form) : null
     const value = snapshot && snapshot.status === 'ready' ? snapshot.value : null
     const user = (snapshot && snapshot.user) || {}
+    const base = (snapshot && snapshot.base) || {}
     const writable = !snapshot || snapshot.writable !== false
     const status = snapshot ? snapshot.status : 'loading'
 
@@ -795,10 +796,15 @@ function createPage(ctx, React) {
 
     const overridden = (field) => {
       const own = getPath(user, field.path)
-      if (own !== undefined) return true
-      // A secret never rides back as a value; `user` still carries the path so the
-      // badge is right, but an empty inline key must not look like an override.
-      return false
+      if (own === undefined) return false
+      // A secret never rides back as a value, so the path being present is the
+      // only signal there is. Everything else has to actually differ: one save
+      // pins the whole served row, and badging values that merely repeat the
+      // inherited default would claim edits nobody made.
+      if (field.type === 'secret') return true
+      const mine = configValue(field, displayValue(field, own))
+      const inherited = configValue(field, displayValue(field, getPath(base, field.path)))
+      return !sameValue(mine, inherited)
     }
 
     const collect = () => {
