@@ -25,6 +25,7 @@ import { createRedactor } from './src/privacy.js'
 import { createVault } from './src/vault.js'
 import { registerTools } from './src/tools.js'
 import { registerCapture } from './src/capture.js'
+import { createGraphHandler, GRAPH_PATH } from './src/graphdata.js'
 
 export const name = 'memory-graph'
 export const inject = ['tools']
@@ -132,6 +133,51 @@ export function apply(ctx, config) {
         } catch {
           // ignore
         }
+      }
+    }
+  })
+
+  // The Session memory view's data door: one exact Fetch route on the
+  // authenticated `/api` channel, so the browser sends the cookie it already
+  // holds and Connection rejects anything that is not the owner Peer. Two
+  // deliberate choices here.
+  //
+  // `connection` is optional, not in `inject`: a headless or CLI profile has no
+  // web server and no browser, and the plugin must keep working there — only the
+  // panel is missing. `ctx.inject` keeps the subscription until the service
+  // appears, so a profile that adds the web GUI later still gets the route.
+  //
+  // The disposer is held by this plugin's effect, not by the Connection
+  // service's: uninstalling or disabling the plugin must remove the door.
+  ctx.effect(() => {
+    const disposeInject = ctx.inject(['connection'], (inner) => {
+      const registry = inner.get('connection')?.fetch
+      if (typeof registry?.register !== 'function') {
+        // A build without exact Fetch routes: the plugin keeps working, the tab
+        // explains itself instead of hanging on a request that can never land.
+        log('warn', 'connection.fetch is unavailable; the session memory view has no data route')
+        return () => {}
+      }
+      const disposeRoute = registry.register({
+        path: GRAPH_PATH,
+        methods: ['GET'],
+        requestBody: 'buffered',
+        fetch: createGraphHandler({ getVault: () => vault, getConfig: () => cfg }),
+      })
+      log('info', `session memory view served at ${GRAPH_PATH}`)
+      return () => {
+        try {
+          disposeRoute?.()
+        } catch {
+          // A route already gone is not an error.
+        }
+      }
+    })
+    return () => {
+      try {
+        disposeInject?.()
+      } catch {
+        // ignore
       }
     }
   })

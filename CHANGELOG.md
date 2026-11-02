@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.6.0 — 2026-11-02
+
+记忆以前只能通过 `memory_search` 被模型看见。现在它也在**会话页签**里：对话 / 上下文 / 编队之后多一个「记忆」，点开就是这个会话留下的东西，以及它连着谁。
+
+**Added**
+
+- 会话视图：`client.js` 往 `conversation.view` 槽注册一格（id `memory-graph`、order 30、标签「记忆 / Memory」，排在「上下文」order 10 之后）。**用自家 id**，因为复用 `chat` / `trajectory` 会替换那一格而不是新增一格。
+- 图的结构全部可证：会话 —`said`→ 本会话的每条情节；会话 —`recall`→ 本会话自己的话真的能唤回的卡片（复用 `searchCards`，和模型查的是同一个函数）；卡片 —`mentions`→ 它提到的实体；情节 —`named`→ 它正文里点名的实体；被推翻的卡片 —`supersedes`→ 它的继任者。跨项目的卡片通过共享实体挂进来，虚线边框、暗一档。
+- 点节点在右侧展开：卡片是标题 / 类型 / 状态 / 项目 / 日期 / 正文 / 实体 / 标签，情节是那一轮的用户原文，实体是"被多少段记忆提到过"。
+- 数据通路：宿主 `ctx.connection.fetch.register` 注册 `/api/memory-graph.graph`（exact Fetch route）。Connection 先验浏览器签名、只把 `owner` Peer 放进来，所以插件里**没有第二套鉴权**；浏览器侧用同源 cookie 请求，`cache-control: no-store`。
+- 布局在宿主算：确定性力导向（220 次迭代、种子位置按节点顺序、归一化到 1080×640），浏览器只把坐标画出来——没有每帧模拟，重开页签是同一张图。
+- `src/graphdata.js`：`buildSessionGraph`（按 `session` 字段过滤情节、项目多数决、召回、实体桥、上限）、`layoutNodes`、`createGraphHandler`、`GRAPH_PATH`。
+- `src/vault.js` 新增 `readEpisodes({ session, limit })`：游标式的 `readUndistilled` 回答不了"这个会话说过什么"（游标可能已经越过那些行），所以单独读全量再过滤。
+- 三种空状态都说人话：没选会话、本会话还没留下情节（提示"聊一轮再刷新"）、读不到记忆库（把宿主回的原因原样打出来，而不是空白面板）。
+- 上限与截断：情节 40 / 卡片 60 / 实体 40 / 跨项目 12 / 边 420，超了写进 `truncated`，页头的计数照实报总数。
+- 隐私：payload 只带用户侧原文（截断 180 字），assistant 一个字都不带——测试里塞了一句哨兵文本，断言它不出现在 JSON 里。
+
+**Changed**
+
+- 页签打开时每 20 秒静默轮询一次（`document.visibilityState === 'hidden'` 时不发），所以蒸馏完或改了卡片不用手点刷新。
+- `client.js` 的 `apply` 拆成 `registerSlots(ctx, React)`，测试可以拿假 `ctx` 断言两个槽的**确切注册**（哪个槽、哪个 id、哪个 order、id 不是已发布的那几个）。
+- 测试口径：`npm test` 185 项（43 + 13 + 28 + 11 + 21 + 54 + 15），新增 `test/graphdata.mjs` 15 项，`test/client.mjs` 21 → 28 项。
+
+**Note**
+
+- 客户端 bundle 由宿主在进程内扫描并缓存，所以换了 `client.js` 之后要**重启一次应用**才看得到新页签；宿主侧的 `/api` 路由同理。设置页的即时生效不受影响（volatile 字段）。
+
 ## 0.5.0 — 2026-11-02
 
 蒸馏在真实记忆库上第一次跑就失败，暴露了两件事：一次调用喂不完一整个后台，以及同一件事会在图上长成两张卡。

@@ -59,6 +59,12 @@ const createReact = () => {
     useEffect(fn, deps) {
       return current.useEffect(fn, deps)
     },
+    useMemo(fn, deps) {
+      return current.useMemo(fn, deps)
+    },
+    useCallback(fn, deps) {
+      return current.useCallback(fn, deps)
+    },
   }
   return { react, bind: (instance) => { current = instance } }
 }
@@ -106,6 +112,30 @@ const mount = (Component, runtime = createReact()) => {
         this.hooks[index] = hook
         this.pending.push(hook)
       }
+    },
+    useMemo(fn, deps) {
+      const index = this.cursor++
+      const previous = this.hooks[index]
+      const changed =
+        !previous ||
+        !deps ||
+        !previous.deps ||
+        deps.length !== previous.deps.length ||
+        deps.some((dep, at) => !Object.is(dep, previous.deps[at]))
+      if (changed) this.hooks[index] = { kind: 'memo', deps, value: fn() }
+      return this.hooks[index].value
+    },
+    useCallback(fn, deps) {
+      const index = this.cursor++
+      const previous = this.hooks[index]
+      const changed =
+        !previous ||
+        !deps ||
+        !previous.deps ||
+        deps.length !== previous.deps.length ||
+        deps.some((dep, at) => !Object.is(dep, previous.deps[at]))
+      if (changed) this.hooks[index] = { kind: 'memo', deps, value: fn }
+      return this.hooks[index].value
     },
     render() {
       runtime.bind(this)
@@ -603,6 +633,8 @@ const openBrowserBundle = async (language = 'zh-CN') => {
     // need the synchronous first paint, so timers park instead of firing.
     setTimeout: () => 0,
     clearTimeout: () => {},
+    setInterval: () => 0,
+    clearInterval: () => {},
     document: {
       head: { appendChild: (node) => styles.push(node) },
       getElementById: (id) => styles.find((node) => node.id === id) || null,
@@ -634,7 +666,7 @@ const openBrowserBundle = async (language = 'zh-CN') => {
       register: (spec, Component) => sections.push({ spec, Component }),
     },
   }
-  return { registration: registered[0], exports, required, injected, sections, styles, runtime, ctx, form }
+  return { registration: registered[0], exports, required, injected, sections, styles, runtime, ctx, form, sandbox }
 }
 
 await check('the browser entry registers a module the loader can address', async () => {
@@ -652,10 +684,10 @@ await check('the browser entry registers a module the loader can address', async
 await check('applying it contributes the Memory Graph page to Settings', async () => {
   const bundle = await openBrowserBundle()
   bundle.exports.apply(bundle.ctx)
-  assert.deepEqual([...bundle.injected], ['settings.section'], 'it waits for the Settings slot')
-  assert.equal(bundle.sections.length, 1, 'exactly one section is registered')
-  const [{ spec, Component }] = bundle.sections
-  assert.equal(spec.name, 'settings.section')
+  assert.deepEqual([...bundle.injected], ['settings.section', 'conversation.view'], 'it waits for both slots')
+  const sections = bundle.sections.filter((entry) => entry.spec.name === 'settings.section')
+  assert.equal(sections.length, 1, 'exactly one section is registered')
+  const [{ spec, Component }] = sections
   assert.equal(spec.id, client.HOST_ENTRY_ID)
   // 15 插件 / 20 预设 / 21 导入 / 40 桌宠 — the page belongs after presets.
   assert.equal(spec.order, 25)
@@ -674,11 +706,166 @@ await check('the sidebar label speaks whatever language the page is in', async (
   const navLabel = async (language) => {
     const bundle = await openBrowserBundle(language)
     bundle.exports.apply(bundle.ctx)
-    const { spec } = bundle.sections[0]
+    const { spec } = bundle.sections.find((entry) => entry.spec.name === 'settings.section')
     return typeof spec.label === 'function' ? spec.label() : spec.label
   }
   assert.equal(await navLabel('zh-CN'), '记忆图谱')
   assert.equal(await navLabel('en-US'), 'Memory Graph')
+})
+
+// ---------------------------------------------------------------------------
+// The Conversation view: a tab of its own, drawn from one host route
+// ---------------------------------------------------------------------------
+
+const openMemoryTab = async (language = 'zh-CN') => {
+  const bundle = await openBrowserBundle(language)
+  bundle.exports.apply(bundle.ctx)
+  const entry = bundle.sections.find((section) => section.spec.name === 'conversation.view')
+  assert.ok(entry, 'a conversation.view entry is registered')
+  return { ...bundle, spec: entry.spec, View: entry.Component }
+}
+
+const SESSION_GRAPH = {
+  ok: true,
+  session: 'sess-1',
+  sessionId: 'sess-1',
+  project: 'proj-a',
+  generatedAt: '2026-11-02T00:00:00.000Z',
+  empty: false,
+  counts: { episodes: 2, cards: 1, entities: 1, foreign: 0, links: 2 },
+  truncated: { episodes: false, cards: false },
+  recall: ['c1'],
+  nodes: [
+    { key: 's:session', k: 'session', label: '', r: 13, x: 540, y: 320 },
+    { key: 'e:2026-11-02.jsonl:0', k: 'episode', label: 'T1', r: 5, x: 400, y: 320, text: '记忆库要用纯文本存。' },
+    {
+      key: 'c:c1',
+      k: 'card',
+      label: '记忆库用纯文本存储',
+      title: '记忆库用纯文本存储',
+      kind: 'decision',
+      project: 'proj-a',
+      status: 'active',
+      created: '2026-11-02',
+      body: '每个记忆一个文件，可以 diff。',
+      entityNames: ['memory-vault'],
+      hot: true,
+      r: 9,
+      x: 700,
+      y: 250,
+    },
+  ],
+  links: [
+    { s: 's:session', t: 'e:2026-11-02.jsonl:0', k: 'said' },
+    { s: 's:session', t: 'c:c1', k: 'recall' },
+  ],
+}
+
+/** Run one view render against a stubbed host route. */
+const renderMemoryTab = async ({ language = 'zh-CN', payload = SESSION_GRAPH } = {}) => {
+  const tab = await openMemoryTab(language)
+  const calls = []
+  // The bundle was evaluated inside the sandbox, so its globals ARE the
+  // sandbox: the route stub has to live there, not on this realm.
+  const previousFetch = tab.sandbox.fetch
+  tab.sandbox.fetch = async (url) => {
+    calls.push(String(url))
+    return { ok: true, status: 200, json: async () => payload }
+  }
+  try {
+    const view = mount(() => tab.View({ sessionId: 'sess-1' }), tab.runtime)
+    await view.settle()
+    return { ...tab, view, calls }
+  } finally {
+    tab.sandbox.fetch = previousFetch
+  }
+}
+
+await check('applying it adds a Memory tab of its own to the Conversation row', async () => {
+  const { spec, View } = await openMemoryTab()
+  assert.equal(spec.id, client.GRAPH_VIEW_ID)
+  // A fresh id adds a cell; reusing 'chat' or 'trajectory' would replace it.
+  assert.ok(spec.id !== 'chat' && spec.id !== 'trajectory', 'the tab must not take a shipped id')
+  assert.ok(spec.order > 10, 'after 上下文 (trajectory, order 10)')
+  assert.equal(typeof View, 'function')
+})
+
+await check('the Memory tab label follows the page language', async () => {
+  for (const [language, expected] of [
+    ['zh-CN', '记忆'],
+    ['en-US', 'Memory'],
+  ]) {
+    const { spec } = await openMemoryTab(language)
+    const label = typeof spec.label === 'function' ? spec.label() : spec.label
+    assert.equal(label, expected)
+  }
+})
+
+await check('the Memory tab asks the host for this session, and only this session', async () => {
+  const { calls, view } = await renderMemoryTab()
+  assert.equal(calls.length, 1, 'one request per paint')
+  assert.equal(calls[0], `${client.GRAPH_API}?session=sess-1`)
+  assert.equal(client.GRAPH_API, '/api/memory-graph.graph', 'the route the host registers')
+  assert.equal(byClass(view.tree, 'mgv-root').length, 1)
+  view.unmount()
+})
+
+await check('the Memory tab draws every node and edge the host sent', async () => {
+  const { view } = await renderMemoryTab()
+  assert.equal(byClass(view.tree, 'mgv-node').length, 3, 'session, episode and card are on screen')
+  assert.equal(byClass(view.tree, 'mgv-link').length, 2)
+  const kinds = byClass(view.tree, 'mgv-node').map((node) => node.props['data-k'])
+  assert.deepEqual(kinds, ['session', 'episode', 'card'])
+  const aside = byClass(view.tree, 'mgv-aside')
+  assert.equal(aside.length, 0, 'nothing is selected until a node is clicked')
+  view.unmount()
+})
+
+await check('clicking a card opens it in the side panel', async () => {
+  const { view } = await renderMemoryTab()
+  const card = byClass(view.tree, 'mgv-node').find((node) => node.props['data-k'] === 'card')
+  card.props.onClick({ stopPropagation() {} })
+  const aside = byClass(view.tree, 'mgv-aside')
+  assert.equal(aside.length, 1, 'the panel appears')
+  const shown = text(aside[0])
+  assert.ok(shown.includes('记忆库用纯文本存储'), 'the card title is shown')
+  assert.ok(shown.includes('每个记忆一个文件'), 'and its body, so the click answers "what was that?"')
+  assert.ok(shown.includes('memory-vault'), 'with the entities that connect it')
+  // Clicking empty canvas clears the selection.
+  byClass(view.tree, 'mgv-canvas')[0].props.onClick()
+  assert.equal(byClass(view.tree, 'mgv-aside').length, 0)
+  view.unmount()
+})
+
+await check('a session with no episodes explains itself instead of drawing', async () => {
+  const { view } = await renderMemoryTab({
+    payload: { ...SESSION_GRAPH, empty: true, counts: { ...SESSION_GRAPH.counts, episodes: 0 }, nodes: [], links: [], recall: [] },
+  })
+  assert.equal(byClass(view.tree, 'mgv-canvas').length, 0, 'no empty drawing')
+  const empty = byClass(view.tree, 'mgv-empty')
+  assert.equal(empty.length, 1)
+  assert.ok(text(empty[0]).includes('还没有留下情节'))
+  view.unmount()
+})
+
+await check('a failing route prints the reason instead of a blank panel', async () => {
+  const tab = await openMemoryTab()
+  const previousFetch = tab.sandbox.fetch
+  tab.sandbox.fetch = async () => ({
+    ok: false,
+    status: 500,
+    json: async () => ({ ok: false, reason: 'unavailable', message: 'vault is gone' }),
+  })
+  try {
+    const view = mount(() => tab.View({ sessionId: 'sess-1' }), tab.runtime)
+    await view.settle()
+    const empty = byClass(view.tree, 'mgv-empty')
+    assert.equal(empty.length, 1)
+    assert.ok(text(empty[0]).includes('vault is gone'), 'the message the host sent is on screen')
+    view.unmount()
+  } finally {
+    tab.sandbox.fetch = previousFetch
+  }
 })
 
 console.log(process.exitCode === 1 ? '\nSOME CHECKS FAILED' : `\nall ${passed} checks passed`)

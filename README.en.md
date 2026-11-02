@@ -6,7 +6,7 @@ Long-term **associative memory** for [DeepSeek Harness](https://getartcraft.com)
 
 Context compaction quietly deletes things. This plugin keeps a second layer — outside the context window, on your own disk, readable by you — so that a decision you made three months ago can still be found.
 
-Plain Node ESM, no build step. Its configuration lives in **Settings → Memory Graph**, four groups on one page, applied on save.
+Plain Node ESM, no build step. Its configuration lives in **Settings → Memory Graph** (four groups on one page, applied on save); there are two places to look — the **Memory tab in a conversation** draws what that session remembered, graph.html at the vault root draws the whole library.
 
 The only third-party dependency is the harness's own `@deepseek-ai/schemastery`, which supplies the config schema (the page reads the value projected from it); without it the plugin still runs and the Memory Graph page simply does not appear.
 
@@ -234,7 +234,23 @@ Dark:
 
 ![The memory graph in dark mode](docs/graph-dark.png)
 
-One honest limit: this is a **static file**, not a live panel inside the DSH Web GUI. The GUI does now have the settings page (`client.js`, a hand-written `__ModuleLoader__` factory, no build step and no JSX), but the graph itself did not move in — a panel means drawing the graph, subscribing to vault changes, zoom and hover, which is a different order of work. Configuration moved into the GUI first; looking stayed here.
+One honest limit: `graph.html` is a **static snapshot of the whole vault** — double-click it, no harness needed. "What did *this* conversation remember?" is a different picture, and it lives in the GUI: see the next section.
+
+## The Memory tab in the GUI
+
+The Conversation tab row (对话 / 上下文 / 编队 / …) gained a cell: 记忆 (Memory). It draws **only this session**:
+
+- The dark node in the middle is the session. The pale blue nodes around it are the episodes it wrote (`T1`, `T2`, …).
+- **Green dashed edges** are the cards this session's own words would actually retrieve — computed with the same `searchCards` the model calls, so what is lit here is what the model really gets when it asks "do you remember?".
+- Grey nodes are entities: a card and an entity are joined when the card mentions it, an episode and an entity when that turn named it.
+- A card from another project arrives through a shared entity (dashed outline, one shade dimmer). That is the only reason the entity layer exists, so it is visible on the graph.
+- Click any node and the side panel opens its full text; click the empty canvas to close it. The header carries the counts, the project, the cross-project count and a refresh button, and the tab re-reads quietly every 20 seconds while it is open.
+
+The data is not baked into the page: the host registers an exact Fetch route at `/api/memory-graph.graph`. DSH's Connection verifies the browser's signature first and only lets an owner Peer through, so the plugin needs no second auth scheme and never exposes the vault directory to the page. The layout is computed on the **host** (deterministic force layout) and the browser only draws the coordinates, so reopening the tab shows the same picture.
+
+Caps: 40 episodes, 60 cards, 40 entities, 12 cross-project cards, 420 edges. The header still reports the real totals — a graph that cannot be read is not worth drawing.
+
+> After editing `client.js` the app needs one restart: the host scans and caches client bundles in-process at startup.
 
 ## Cross-project means one person's projects, not shared memory
 
@@ -274,13 +290,14 @@ Side benefit: an injected message no longer cuts a turn in half, so an episode's
 No network, no real vault:
 
 ```bash
-npm test        # 43 + 13 + 21 + 11 + 21 + 54 = 163 checks, plus the 25-question retrieval eval
+npm test        # 43 + 13 + 28 + 11 + 21 + 54 + 15 = 185 checks, plus the 25-question retrieval eval
 npm run eval    # retrieval eval only (offline, deterministic)
 ```
 
 - `test/smoke.mjs` — storage, redaction, BM25 retrieval, entity expansion, supersede chain, extractor parsing; and near-duplicate titles not forking the graph (a re-worded card folds into the old one, the fuller body wins, never across projects, and a card that names its `supersedes` is a reversal rather than a duplicate)
 - `test/schema.mjs` — the Settings page must not drift from the runtime: every leaf of `Config({})` is compared with `resolveConfig({})` in both directions (`vaultDir` is the one exception — the page holds raw text, the runtime an absolute path), so a dead control and an invisible setting both fail; plus the transport union, numeric bounds, the `secret` role on the inline key, the 28 volatile leaves matching the page's field table exactly, and the four structural keys staying off it
-- `test/client.mjs` — mounts the page on a minimal React stand-in: the controls drawn equal the fields that should show, switching `transport` reveals the http knobs, an empty inline key is never sent as a deletion, an out-of-range number never reaches the wire, a refused save clears the drafts and explains itself, restore sends `unset` rather than `set`, a value that merely repeats the inherited default is not badged as a customisation, the stylesheet is a single `<style>` tagged with the package name, and `client.js` contains no `export`/`import` (the loader evaluates it as a script). It then evaluates `client.js` in a fake page carrying `window.__ModuleLoader__` and walks the real browser path — factory, `apply`, `settings.section` registration — checking that `react` is the only module required, the registration id is the package name, the order is 25, and the sidebar label follows the page language
+- `test/client.mjs` — mounts the page on a minimal React stand-in: the controls drawn equal the fields that should show, switching `transport` reveals the http knobs, an empty inline key is never sent as a deletion, an out-of-range number never reaches the wire, a refused save clears the drafts and explains itself, restore sends `unset` rather than `set`, a value that merely repeats the inherited default is not badged as a customisation, the stylesheet is a single `<style>` tagged with the package name, and `client.js` contains no `export`/`import` (the loader evaluates it as a script). It then evaluates `client.js` in a fake page carrying `window.__ModuleLoader__` and walks the real browser path — factory, `apply`, both slot registrations — checking that `react` is the only module required, the registration id is the package name, the orders are 25 and 30, and the labels follow the page language. Finally it drives the **Memory tab**: one request per paint carrying this `sessionId`, every node and edge the host sent drawn, a click opening the card's title and body in the side panel, and both the empty session and the failing route explaining themselves instead of going blank
+- `test/graphdata.mjs` — the Memory tab's data: episodes filtered by `session`, majority project, the recall query taking the newest turns, a deterministic layout inside the box, every edge pointing at a node that exists, a cross-project card arriving through a shared entity, the caps reporting that they held, no assistant text in the payload, and the route answering 400 / 200 / 500 for missing session, normal, and a broken vault
 - `test/capture.mjs` — drives the capture listener with real `session/event` shapes, including injected context
 - `test/tools.mjs` — runs `execute` + `render` for all eight tools
 - `test/extract.mjs` — the extractor: `fetch` stubbed for the http route (prompt construction, key resolution order, tolerant JSON parsing, per-card project attribution, cursor advance, dry run writing nothing, secrets stopped before the write), then a fake `llm` service for the harness route (borrows the Settings model and thinking level, honours an explicit override, explains a missing selection, handles every terminal `finish`, reports cancellation, rejects an empty completion, and never touches `fetch`), and finally batching: the batch size derived from the output budget, a long backlog split across calls, a truncated batch halved and retried, earlier batches kept when a later one fails, and `dryRun` previewing only the first batch
@@ -340,7 +357,8 @@ One deliberate asymmetry: **asking about the past gets its own path**. "Is the e
 - Retrieval is BM25 plus entity expansion — **no vector recall**. Chinese uses bigram tokenization, which works but trails embeddings; swap it out once you pass a few thousand cards.
 - Distillation quality depends on the extractor model and **only happens when you call it**. Pair it with a scheduled task.
 - Harness mode borrows "whatever model is currently selected in Settings", so switching models mid-conversation also switches the extractor; turn `useCurrentModel` off to pin one. It spends that provider's quota — being a plugin does not make the calls free.
-- The graph view is a **static HTML file** (`graph.html`), not a panel inside the DSH Web GUI; a panel would be a separate client plugin.
+- `graph.html` is a **static HTML file** (a snapshot of the whole vault). The Memory tab in a conversation is a real GUI panel, but it draws only the **current session**, not a browsable whole-library graph — zoom, search and filtering still live in `graph.html`.
+- The Memory tab reads one route, `/api/memory-graph.graph`, so it needs an environment that runs the Web GUI; in a headless or CLI profile the plugin works as usual and simply has no tab. After editing `client.js` the app needs one restart (client bundles are scanned and cached in-process).
 - Deduplication starts at "same project + same normalized title" and widens to titles sharing **at least 0.55 of their tokens** (the same bigram tokenizer retrieval uses; measured on the eval set: unrelated cards peak at 0.20, one model's re-wordings of the same memory scored 0.60–0.78). So "蒸馏走独立模型接口" and "蒸馏用独立模型接口" are now one card instead of two nodes pulling retrieval apart. A card that carries `supersedes` skips that pass — "monitoring moves to Prometheus" reads like "monitoring moved to Uptime Kuma" but is a new decision. Opposite meanings phrased far apart still become two cards: this compares wording, it does not read intent.
 - The page is four static section cards drawn from a hand-written field table, not a generic reflection of the schema; `test/schema.mjs` keeps the two in sync, but a schema change that skips that table will show up as a failing test rather than a new control. Array-valued keys (`skipPatterns`, `denyPatterns`) are still edited as one entry per line in a text area.
 - Anything changed outside the page is picked up on the next save round-trip: the page re-reads the served value and keeps your unsaved drafts, but it does not poll.

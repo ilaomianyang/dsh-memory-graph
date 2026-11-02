@@ -24,6 +24,9 @@
 const PACKAGE_NAME = '@local/dsh-memory-graph'
 const HOST_ENTRY_ID = 'memory-graph'
 const STYLE_ID = 'dsh-memory-graph-settings-css'
+/** The Conversation view cell this plugin adds, and the host route it reads. */
+const GRAPH_VIEW_ID = 'memory-graph'
+const GRAPH_API = '/api/memory-graph.graph'
 
 const ZH = (() => {
   try {
@@ -656,6 +659,56 @@ const CSS = `
   cursor: pointer;
 }
 .mg-btn-ghost:disabled { opacity: 0.55; cursor: default; }
+.mgv-root { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 0; }
+.mgv-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px 8px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.08));
+  flex: 0 0 auto;
+}
+.mgv-title { font-size: 12.5px; font-weight: 600; }
+.mgv-counts { color: var(--dsw-alias-label-tertiary, #8a8a8a); font-size: 11.5px; }
+.mgv-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.05));
+  color: var(--dsw-alias-label-secondary, #5a5a5a);
+  font-size: 11px;
+}
+.mgv-spacer { flex: 1 1 auto; }
+.mgv-body { display: flex; flex: 1 1 auto; min-height: 0; }
+.mgv-canvas { flex: 1 1 auto; min-width: 0; display: block; touch-action: none; }
+.mgv-link { stroke: var(--dsw-alias-border-l1, rgba(0, 0, 0, 0.16)); stroke-width: 1; }
+.mgv-link[data-k="recall"] { stroke: var(--dsw-alias-state-success-primary, #1a7f37); stroke-dasharray: 3 3; }
+.mgv-link[data-k="supersedes"] { stroke: var(--dsw-alias-state-warning-primary, #b26a00); }
+.mgv-node { cursor: pointer; }
+.mgv-node text {
+  font-size: 10px;
+  fill: var(--dsw-alias-label-secondary, #5a5a5a);
+  pointer-events: none;
+}
+.mgv-node[data-k="session"] text { font-size: 11.5px; font-weight: 600; fill: var(--dsw-alias-label-primary, #1c1c1c); }
+.mgv-node[data-k="card"] text { fill: var(--dsw-alias-label-primary, #1c1c1c); }
+.mgv-node[data-dim="true"] { opacity: 0.22; }
+.mgv-node[data-selected="true"] circle { stroke: var(--dsw-alias-label-primary, #1c1c1c); stroke-width: 2; }
+.mgv-aside {
+  flex: 0 0 286px;
+  border-left: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.08));
+  padding: 12px 14px;
+  overflow: auto;
+  font-size: 12px;
+}
+.mgv-aside-h { font-weight: 600; font-size: 12.5px; line-height: 1.45; }
+.mgv-aside-meta { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; }
+.mgv-aside-b { margin-top: 10px; color: var(--dsw-alias-label-secondary, #5a5a5a); line-height: 1.6; white-space: pre-wrap; }
+.mgv-aside-tags { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 5px; }
+.mgv-empty { padding: 40px 24px; max-width: 560px; }
+.mgv-empty-t { font-weight: 600; margin-bottom: 8px; }
+.mgv-empty-d { color: var(--dsw-alias-label-secondary, #5a5a5a); font-size: 12px; line-height: 1.7; }
+.mgv-legend { display: flex; gap: 12px; align-items: center; color: var(--dsw-alias-label-tertiary, #8a8a8a); font-size: 11px; }
+.mgv-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
 `
 
 function ensureStyle() {
@@ -1136,14 +1189,432 @@ function safeSnapshot(form) {
 }
 
 // ---------------------------------------------------------------------------
+// 对话页签：这个会话的记忆
+//
+// The tab sits in the Conversation view row beside 对话 and 上下文, so it is
+// reached from the conversation it describes. The host answers on one exact
+// Fetch route (`/api/memory-graph.graph`); Connection admits the browser's own
+// cookie first and hands back only an owner Peer, so the panel never invents an
+// auth scheme of its own.
+//
+// The layout is computed on the host. The browser therefore only maps points
+// onto the viewBox and draws them: no simulation per render, no second layout
+// when the tab is reopened, and the same picture for the same vault.
+// ---------------------------------------------------------------------------
+
+const KIND_FILL = {
+  decision: '#3b6ef0',
+  preference: '#7a4fd0',
+  fact: '#1a7f37',
+  plan: '#b26a00',
+  constraint: '#c62828',
+  note: '#5a6470',
+}
+
+/**
+ * The registered route is an absolute `/api/...` path, but the page that runs
+ * this bundle is not always at the origin root: a mounted deployment serves the
+ * GUI under a prefix, and a custom-scheme page has no usable origin at all. So
+ * resolve explicit origin + path when the page has a real http(s) origin, and
+ * fall back to letting the page resolve the path itself otherwise.
+ */
+function apiUrl(path) {
+  try {
+    const location = globalThis.location
+    const origin = String((location && location.origin) || '')
+    if (/^https?:\/\//.test(origin)) return `${origin}${path}`
+  } catch {
+    // No usable location: fall through to the bare path.
+  }
+  return path
+}
+
+function fillOf(node) {
+  if (node.k === 'session') return '#111318'
+  if (node.k === 'episode') return '#c9d3e0'
+  if (node.k === 'entity') return '#9aa4b2'
+  if (node.foreign) return '#e2e6ee'
+  return KIND_FILL[node.kind] ?? KIND_FILL.note
+}
+
+function createGraphView(ctx, React) {
+  const h = React.createElement
+  const { useCallback, useEffect, useMemo, useRef, useState } = React
+
+  function kindText(node) {
+    if (node.k === 'session') return t('本次会话', 'this session')
+    if (node.k === 'episode') return t('情节', 'episode')
+    if (node.k === 'entity') return t('实体', 'entity')
+    const map = {
+      decision: t('决定', 'decision'),
+      preference: t('偏好', 'preference'),
+      fact: t('事实', 'fact'),
+      plan: t('计划', 'plan'),
+      constraint: t('限制', 'constraint'),
+      note: t('笔记', 'note'),
+    }
+    return map[node.kind] ?? node.kind
+  }
+
+  function statusText(status) {
+    if (status === 'superseded') return t('已被推翻', 'superseded')
+    if (status === 'retracted') return t('已撤回', 'retracted')
+    return t('有效', 'active')
+  }
+
+  return function SessionMemoryView(props) {
+    const sessionId = props && props.sessionId ? String(props.sessionId) : ''
+    const [data, setData] = useState(null)
+    const [error, setError] = useState('')
+    const [busy, setBusy] = useState(false)
+    const [selectedKey, setSelectedKey] = useState('')
+    const [hoverKey, setHoverKey] = useState('')
+    const ticket = useRef(0)
+    const mounted = useRef(true)
+
+    const load = useCallback(
+      (quiet) => {
+        if (sessionId === '') return undefined
+        if (quiet !== true) setBusy(true)
+        const mine = ++ticket.current
+        return fetch(apiUrl(`${GRAPH_API}?session=${encodeURIComponent(sessionId)}`), {
+          headers: { accept: 'application/json' },
+          credentials: 'same-origin',
+        })
+          .then((response) =>
+            response
+              .json()
+              .catch(() => null)
+              .then((body) => ({ response, body })),
+          )
+          .then(({ response, body }) => {
+            if (!mounted.current || mine !== ticket.current) return
+            if (!response.ok || !body || body.ok !== true) {
+              const why = (body && (body.message || body.reason)) || `HTTP ${response.status}`
+              setError(String(why))
+              setBusy(false)
+              return
+            }
+            setData(body)
+            setError('')
+            setBusy(false)
+          })
+          .catch((failure) => {
+            if (!mounted.current || mine !== ticket.current) return
+            setError(String((failure && failure.message) || failure))
+            setBusy(false)
+          })
+      },
+      [sessionId],
+    )
+
+    useEffect(() => {
+      mounted.current = true
+      setData(null)
+      setError('')
+      setSelectedKey('')
+      setHoverKey('')
+      if (sessionId === '') return undefined
+      load(false)
+      // The graph changes when you talk, distill, or edit a card elsewhere. A
+      // quiet poll keeps the open tab honest without a spinner every 20 seconds.
+      const timer = setInterval(() => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+        load(true)
+      }, 20000)
+      return () => {
+        mounted.current = false
+        clearInterval(timer)
+        ticket.current += 1
+      }
+    }, [sessionId, load])
+
+    const nodes = (data && data.nodes) || []
+    const links = (data && data.links) || []
+    const byKey = useMemo(() => {
+      const map = new Map()
+      for (const node of nodes) map.set(node.key, node)
+      return map
+    }, [nodes])
+    const neighbours = useMemo(() => {
+      const map = new Map()
+      for (const node of nodes) map.set(node.key, new Set())
+      for (const link of links) {
+        map.get(link.s)?.add(link.t)
+        map.get(link.t)?.add(link.s)
+      }
+      return map
+    }, [nodes, links])
+
+    const focus = hoverKey !== '' ? hoverKey : selectedKey
+    const near = neighbours.get(focus)
+    const selected = (selectedKey !== '' && byKey.get(selectedKey)) || null
+
+    const head = h(
+      'div',
+      { className: 'mgv-head' },
+      h('span', { className: 'mgv-title' }, t('这个会话的记忆', 'Memory for this session')),
+      data
+        ? h(
+            'span',
+            { className: 'mgv-counts' },
+            t(
+              `${data.counts.episodes} 条情节 · ${data.counts.cards} 张卡片 · ${data.counts.entities} 个实体`,
+              `${data.counts.episodes} episodes · ${data.counts.cards} cards · ${data.counts.entities} entities`,
+            ),
+          )
+        : null,
+      data && data.project ? h('span', { className: 'mgv-chip' }, data.project) : null,
+      data && data.counts.foreign > 0
+        ? h('span', { className: 'mgv-chip' }, t(`跨项目 ${data.counts.foreign}`, `${data.counts.foreign} cross-project`))
+        : null,
+      h('span', { className: 'mgv-spacer' }),
+      h(
+        'div',
+        { className: 'mgv-legend' },
+        h('span', null, h('i', { className: 'mgv-dot', style: { background: '#c9d3e0' } }), t('情节', 'episode')),
+        h('span', null, h('i', { className: 'mgv-dot', style: { background: KIND_FILL.decision } }), t('卡片', 'card')),
+        h('span', null, h('i', { className: 'mgv-dot', style: { background: '#9aa4b2' } }), t('实体', 'entity')),
+      ),
+      h(
+        'button',
+        { type: 'button', className: 'mg-btn-ghost', disabled: busy || sessionId === '', onClick: () => load(false) },
+        busy ? t('读取中…', 'Reading…') : t('刷新', 'Refresh'),
+      ),
+    )
+
+    if (sessionId === '') {
+      return h(
+        'div',
+        { className: 'mgv-root' },
+        head,
+        h(
+          'div',
+          { className: 'mgv-empty' },
+          h('div', { className: 'mgv-empty-t' }, t('还没有选中的会话', 'No session selected')),
+          h('div', { className: 'mgv-empty-d' }, t('打开一个会话再回来。', 'Open a conversation and come back.')),
+        ),
+      )
+    }
+
+    if (error !== '') {
+      return h(
+        'div',
+        { className: 'mgv-root' },
+        head,
+        h(
+          'div',
+          { className: 'mgv-empty' },
+          h('div', { className: 'mgv-empty-t' }, t('读不到记忆', 'Cannot read the memory vault')),
+          h('div', { className: 'mgv-empty-d' }, error),
+        ),
+      )
+    }
+
+    if (!data) {
+      return h(
+        'div',
+        { className: 'mgv-root' },
+        head,
+        h('div', { className: 'mgv-empty' }, h('div', { className: 'mgv-empty-d' }, t('读取中…', 'Reading…'))),
+      )
+    }
+
+    if (data.empty) {
+      return h(
+        'div',
+        { className: 'mgv-root' },
+        head,
+        h(
+          'div',
+          { className: 'mgv-empty' },
+          h('div', { className: 'mgv-empty-t' }, t('这个会话还没有留下情节', 'This session has not left an episode yet')),
+          h(
+            'div',
+            { className: 'mgv-empty-d' },
+            t(
+              '每聊完一轮就落一条原始片段。聊一轮再刷新，或者确认 设置 → 记忆图谱 里「记录对话」是开着的。',
+              'One episode is written per finished turn. Talk a turn and refresh, or check that 记录对话 is on in Settings → Memory graph.',
+            ),
+          ),
+        ),
+      )
+    }
+
+    return h(
+      'div',
+      { className: 'mgv-root' },
+      head,
+      h(
+        'div',
+        { className: 'mgv-body' },
+        h(
+          'svg',
+          {
+            className: 'mgv-canvas',
+            viewBox: '0 0 1080 640',
+            preserveAspectRatio: 'xMidYMid meet',
+            onClick: () => setSelectedKey(''),
+          },
+          links.map((link, i) => {
+            const a = byKey.get(link.s)
+            const b = byKey.get(link.t)
+            if (!a || !b) return null
+            const dim = focus !== '' && !(link.s === focus || link.t === focus)
+            return h('line', {
+              key: `l${i}`,
+              className: 'mgv-link',
+              'data-k': link.k,
+              x1: a.x,
+              y1: a.y,
+              x2: b.x,
+              y2: b.y,
+              opacity: dim ? 0.25 : 0.9,
+            })
+          }),
+          nodes.map((node) => {
+            const dim = near !== undefined && !near.has(node.key) && node.key !== focus
+            return h(
+              'g',
+              {
+                key: node.key,
+                className: 'mgv-node',
+                'data-k': node.k,
+                'data-dim': dim ? 'true' : 'false',
+                'data-selected': node.key === selectedKey ? 'true' : 'false',
+                onClick: (event) => {
+                  event.stopPropagation()
+                  setSelectedKey(node.key === selectedKey ? '' : node.key)
+                },
+                onMouseEnter: () => setHoverKey(node.key),
+                onMouseLeave: () => setHoverKey(''),
+              },
+              h('circle', {
+                cx: node.x,
+                cy: node.y,
+                r: node.r,
+                fill: fillOf(node),
+                stroke: node.k === 'session' ? 'none' : 'rgba(0,0,0,0.10)',
+                strokeWidth: 1,
+                strokeDasharray: node.foreign ? '2 2' : undefined,
+              }),
+              h(
+                'text',
+                {
+                  x: node.x + node.r + 5,
+                  y: node.y + 3.5,
+                  textAnchor: node.k === 'session' ? 'middle' : 'start',
+                  ...(node.k === 'session' ? { x: node.x, y: node.y - node.r - 8 } : {}),
+                },
+                node.k === 'session' ? t('本次会话', 'this session') : node.label,
+              ),
+            )
+          }),
+        ),
+        selected
+          ? h(
+              'aside',
+              { className: 'mgv-aside' },
+              h('div', { className: 'mgv-aside-h' }, selected.k === 'session' ? t('本次会话', 'This session') : selected.k === 'entity' ? selected.label : selected.label),
+              h(
+                'div',
+                { className: 'mgv-aside-meta' },
+                h('span', { className: 'mgv-chip' }, kindText(selected)),
+                selected.project ? h('span', { className: 'mgv-chip' }, selected.project) : null,
+                selected.status ? h('span', { className: 'mgv-chip' }, statusText(selected.status)) : null,
+                selected.created ? h('span', { className: 'mgv-chip' }, selected.created) : null,
+              ),
+              h(
+                'div',
+                { className: 'mgv-aside-b' },
+                selected.k === 'session'
+                  ? t(
+                      `这个会话写下了 ${data.counts.episodes} 条情节，其中 ${data.recall.length} 张卡片会被它自己的话唤回（虚线的边）。`,
+                      `${data.counts.episodes} episodes from this session; ${data.recall.length} cards would be recalled by its own words (dashed edges).`,
+                    )
+                  : selected.k === 'episode'
+                    ? selected.text || t('（这一轮没有留下用户原文）', '(no user text in this turn)')
+                    : selected.k === 'card'
+                      ? selected.body || ''
+                      : selected.k === 'entity'
+                        ? t(
+                            `被 ${selected.mentions ?? 0} 段记忆提到过。图上连着的卡片就是它串起来的记忆。`,
+                            `Mentioned by ${selected.mentions ?? 0} memories. The cards joined to it are the memories it links.`,
+                          )
+                        : '',
+              ),
+              selected.entityNames && selected.entityNames.length > 0
+                ? h(
+                    'div',
+                    { className: 'mgv-aside-tags' },
+                    selected.entityNames.map((name, i) => h('span', { key: `e${i}`, className: 'mgv-chip' }, name)),
+                  )
+                : null,
+              selected.status === 'superseded' && selected.supersededBy
+                ? h('div', { className: 'mgv-aside-tags' }, h('span', { className: 'mgv-chip' }, t(`被 ${selected.supersededBy} 取代`, `replaced by ${selected.supersededBy}`)))
+                : null,
+              selected.tags && selected.tags.length > 0
+                ? h(
+                    'div',
+                    { className: 'mgv-aside-tags' },
+                    selected.tags.map((tag, i) => h('span', { key: `t${i}`, className: 'mgv-chip' }, `#${tag}`)),
+                  )
+                : null,
+            )
+          : null,
+      ),
+    )
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
+
+/**
+ * The two slots this bundle fills. Split out of `apply` so the suite can drive
+ * it with a stub `ctx` and assert the exact registrations: which slot, which id,
+ * which order, and that a fresh id is used rather than a shipped one (reusing
+ * `chat` or `trajectory` would replace that cell instead of adding one).
+ */
+function registerSlots(ctx, React) {
+  ensureStyle()
+  const Page = createPage(ctx, React)
+  ctx.slots.inject('settings.section', () =>
+    ctx.slots.register(
+      {
+        name: 'settings.section',
+        id: HOST_ENTRY_ID,
+        // 15 is 插件, 20 预设, 21 导入, 40 桌宠: sit between presets and the pet page.
+        order: 25,
+        label: () => t('记忆图谱', 'Memory Graph'),
+      },
+      Page,
+    ),
+  )
+
+  // A view of its own in the Conversation row: after the chat (0) and the
+  // context it burned (10), what survived it. Registering the entry is enough —
+  // the row shows a tab once the session has more than one view.
+  const SessionMemoryView = createGraphView(ctx, React)
+  ctx.slots.inject('conversation.view', () =>
+    ctx.slots.register(
+      {
+        name: 'conversation.view',
+        id: GRAPH_VIEW_ID,
+        order: 30,
+        label: () => t('记忆', 'Memory'),
+      },
+      SessionMemoryView,
+    ),
+  )
+}
 
 if (typeof window === 'undefined' || !window.__ModuleLoader__ || typeof window.__ModuleLoader__.load !== 'function') {
   // Plain Node import (tests, schema tooling): publish what the suite needs and
   // touch nothing else. Headless by design — no document, no styles.
   globalThis.__memoryGraphFormSpec = FORM_SPEC
-  globalThis.__memoryGraphClient = { FORM_SPEC, createPage, ensureStyle, PACKAGE_NAME, HOST_ENTRY_ID, STYLE_ID }
+  globalThis.__memoryGraphClient = { FORM_SPEC, createPage, createGraphView, registerSlots, ensureStyle, PACKAGE_NAME, HOST_ENTRY_ID, STYLE_ID, GRAPH_API, GRAPH_VIEW_ID }
 } else {
   window.__ModuleLoader__.load({
     id: PACKAGE_NAME,
@@ -1157,20 +1628,7 @@ if (typeof window === 'undefined' || !window.__ModuleLoader__ || typeof window._
       const inject = ['slots']
 
       function apply(ctx) {
-        ensureStyle()
-        const Page = createPage(ctx, React)
-        ctx.slots.inject('settings.section', () =>
-          ctx.slots.register(
-            {
-              name: 'settings.section',
-              id: HOST_ENTRY_ID,
-              // 15 is 插件, 20 预设, 21 导入, 40 桌宠: sit between presets and the pet page.
-              order: 25,
-              label: () => t('记忆图谱', 'Memory Graph'),
-            },
-            Page,
-          ),
-        )
+        registerSlots(ctx, React)
       }
 
       exports.name = name
@@ -1178,6 +1636,9 @@ if (typeof window === 'undefined' || !window.__ModuleLoader__ || typeof window._
       exports.apply = apply
       // Exposed for the host-side schema test and for debugging in devtools.
       exports.formSpec = FORM_SPEC
+      exports.createGraphView = createGraphView
+      exports.GRAPH_API = GRAPH_API
+      exports.GRAPH_VIEW_ID = GRAPH_VIEW_ID
       return module.exports
     },
   })

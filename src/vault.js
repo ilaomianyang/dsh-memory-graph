@@ -785,6 +785,39 @@ export function createVault(cfg, redactor) {
     }
   }
 
+  /**
+   * Every episode, newest last, optionally narrowed to one Session.
+   *
+   * `readUndistilled` walks from a cursor and stops at a budget, which is the
+   * wrong shape for a viewer that wants "what was said in THIS Session": the
+   * cursor may sit past those lines already, and a Session's episodes are
+   * usually the most recent records, so the whole set is read and filtered.
+   * `limit` keeps the newest N after filtering.
+   * @returns {Promise<Array<{file: string, line: number, record: object}>>}
+   */
+  async function readEpisodes({ session = null, limit = 0 } = {}) {
+    await ensure()
+    const out = []
+    for (const name of await episodeFiles()) {
+      const text = await readText(path.join(P.episodes, name), '')
+      if (text === '') continue
+      const lines = text.split('\n')
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim() === '') continue
+        let record
+        try {
+          record = JSON.parse(lines[i])
+        } catch {
+          continue // a torn last line, not a reason to lose the file
+        }
+        if (session !== null && record?.session !== session) continue
+        out.push({ file: name, line: i, record })
+      }
+    }
+    if (limit > 0 && out.length > limit) return out.slice(out.length - limit)
+    return out
+  }
+
   return {
     dir: cfg.vaultDir,
     paths: P,
@@ -793,6 +826,7 @@ export function createVault(cfg, redactor) {
     appendEpisode,
     episodeFiles,
     readUndistilled,
+    readEpisodes,
     markDistilled,
     listCards,
     getCard,
