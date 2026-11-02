@@ -242,14 +242,15 @@ Side benefit: an injected message no longer cuts a turn in half, so an episode's
 No network, no real vault:
 
 ```bash
-npm test        # 30 + 11 + 21 + 34 = 96 checks, plus the 25-question retrieval eval
+npm test        # 38 + 9 + 11 + 21 + 48 = 127 checks, plus the 25-question retrieval eval
 npm run eval    # retrieval eval only (offline, deterministic)
 ```
 
 - `test/smoke.mjs` — storage, redaction, BM25 retrieval, entity expansion, supersede chain, extractor parsing
+- `test/schema.mjs` — the Settings schema must not drift from the runtime: every leaf of `Config({})` is compared with `resolveConfig({})` in both directions (`vaultDir` is the one exception — the form holds raw text, the runtime an absolute path), so a dead form field and an invisible setting both fail; plus the transport union, numeric bounds, the `secret` role on the inline key, and every setting appearing in the projected schema
 - `test/capture.mjs` — drives the capture listener with real `session/event` shapes, including injected context
 - `test/tools.mjs` — runs `execute` + `render` for all eight tools
-- `test/extract.mjs` — the extractor: `fetch` stubbed for the http route (prompt construction, key resolution order, tolerant JSON parsing, per-card project attribution, cursor advance, dry run writing nothing, secrets stopped before the write), then a fake `llm` service for the harness route (borrows the Settings model and thinking level, honours an explicit override, explains a missing selection, handles every terminal `finish`, rejects an empty completion, and never touches `fetch`)
+- `test/extract.mjs` — the extractor: `fetch` stubbed for the http route (prompt construction, key resolution order, tolerant JSON parsing, per-card project attribution, cursor advance, dry run writing nothing, secrets stopped before the write), then a fake `llm` service for the harness route (borrows the Settings model and thinking level, honours an explicit override, explains a missing selection, handles every terminal `finish`, reports cancellation, rejects an empty completion, and never touches `fetch`)
 
 Two suites do touch the network (and cost money), so they are not in `npm test`:
 
@@ -258,7 +259,7 @@ npm run live             # real model, end to end: 3 episodes → distill → se
 npm run live:supersede   # real model: record a decision, then correct it, check the supersede chain
 ```
 
-They read the key from `~/.dsh/.credentials.yaml` or the environment (see above); nothing is hard-coded or persisted.
+They read the key from `~/.dsh/.credentials.yaml` or the environment (see above); nothing is hard-coded or persisted. Both run in a plain `node` process with no harness `llm` service to borrow, so they set `transport: 'http'` explicitly — the plugin's own default is `harness`.
 
 ## Distillation, measured (real runs, not estimates)
 

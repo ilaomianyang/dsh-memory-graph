@@ -6,19 +6,21 @@
 
 **Added**
 
-- `Config` schema（`src/schema.js`）：DSH 的 Settings 表单是照着插件导出的 schema 画的，之前没导出，所以设置里根本没有这一行。现在 21 个字段全部带中英文说明，包括 `vaultDir`、`capture.*`、`privacy.*`、`extractor.*`、`retrieval.*`；每一格都有默认值，空的 `config:` 依然合法。
+- `Config` schema（`src/schema.js`）：DSH 的 Settings 表单是照着插件导出的 schema 画的，之前没导出，所以设置里根本没有这一行。现在 32 个设置项全部带中英文说明，包括 `vaultDir`、`capture.*`、`privacy.*`、`extractor.*`、`retrieval.*`；每一格都有默认值，空的 `config:` 依然合法。
+- `test/schema.mjs`（9 项）：表单和运行时两条默认值**双向**比对，多一格没用的、少一格看不见的都算失败（只放过 `vaultDir`——表单存原始文本、运行时存绝对路径）；顺带锁住 `transport` 的取值、数值边界、`apiKey` 的 `secret` 角色、以及所有设置项都真的出现在投影出来的 schema 里。
 - `extractor.transport: 'harness'`（默认）：蒸馏不再要求另配 endpoint 和 key，而是向 Harness 的 `llm` 服务借一次调用，提供商 / 模型 / **思考强度**全部照搬 **Settings → 模型**里的当前选择（`agentDefaultModel.currentSelection()`）。设置里配过的 key 直接生效，插件不碰凭据。
 - `extractor.useCurrentModel` / `provider` / `reasoningEffort`：想钉死一个抽取专用模型就关掉跟随、填 provider + model；想换思考档就填 `reasoningEffort`（留空沿用设置里的那一档）。
 - `extractor.transport: 'http'`：原来的直连路线保留，一个字段切回去。`baseUrl` / `path` / `model` / `apiKeyEnv` / `apiKey` / `temperature` 现在都标注为 http 专用。
 - `extractor.apiKey` 标了 `role('secret')`，同时在 README 里明说**不要用它**——表单里填的密钥会明文落进 profile 配置，`apiKeyEnv` 指向凭据库才是设计上的路线。
 - `memory_stats` 新增一行 `extractor:`，说明当前走哪条路、用哪个模型、思考档是什么；`memory_distill` 的报告里也带上了 `model` 和来源。只报来源，不报值。
-- `test/extract.mjs` 从 34 项扩到 47 项：新增 harness 路线的假 `llm` 服务（借用设置模型、显式覆盖、没选模型时的报错、`finish` 的 error / max-tokens、空回复、全程不碰 `fetch`）。
+- `test/extract.mjs` 从 34 项扩到 48 项：新增 harness 路线的假 `llm` 服务（借用设置模型、显式覆盖、没选模型时的报错、`finish` 的 error / max-tokens / aborted、取消时说明是谁取消的、空回复、全程不碰 `fetch`）。
 
 **Changed**
 
 - harness 路线**不传 `temperature`**：采样交给被借用的那一路模型，避免和某些提供商的思考模式打架；`extractor.temperature` 因此只在 http 模式下生效。
 - 报告与审计行改为 `model=<provider>/<model> via=harness route=<来源 · effort <档>>`。
-- `extractor.model` 的空值处理按路线分开：http 模式回退到 `deepseek-chat`，harness 模式下被清空就是空，由路由检查报「缺 provider/model」，而不是悄悄用一个别的模型顶上去。
+- `test/live.mjs` / `test/live-supersede.mjs` 显式写 `transport: 'http'`：这两个脚本跑在普通 `node` 进程里，没有 Harness 的 `llm` 服务可借，改成默认 harness 后它们会连不上。
+- `extractor.model` 的空值处理按路线分开：默认值改成空，http 模式在归一化时回退到 `deepseek-chat`；harness 模式下被清空就是空，由路由检查报「缺 provider/model」，而不是悄悄用一个别的模型顶上去。
 - 插件不再是"零依赖"：`index.js` 会试着加载 `@deepseek-ai/schemastery`（Harness 自带的那个，也是所有官方插件用的那个），加载不到就退化成"没有表单、跑默认值"，插件本身照样起来。所以**裸仓库 + `link:` 安装需要先 `npm install` 一次**，README 的安装步骤已加这一句。
 - `package.json` 的 `description` 同步改口径（原文写着 "Zero dependencies"）。
 

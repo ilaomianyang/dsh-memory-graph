@@ -105,8 +105,10 @@ const extractor = z.object({
   path: z.string().default('/chat/completions').description('仅 http 模式：补全路径 · http transport only: completion path'),
   model: z
     .string()
-    .default('deepseek-chat')
-    .description('模型名（http 模式必填；harness 模式在关掉 useCurrentModel 后使用）· model name'),
+    .default('')
+    .description(
+      '模型名；http 模式留空即 deepseek-chat，harness 模式下只有关掉 useCurrentModel 才用到 · model name; http mode falls back to deepseek-chat',
+    ),
   apiKeyEnv: z
     .string()
     .default('MEMORY_LLM_API_KEY')

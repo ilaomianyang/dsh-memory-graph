@@ -238,14 +238,15 @@ Harness 会把运行时快照、技能目录、时间戳、审批通知、压缩
 零依赖，不联网，不碰真实记忆库：
 
 ```bash
-npm test        # 30 + 11 + 21 + 34 = 96 项检查，另加 25 题检索评测
+npm test        # 38 + 9 + 11 + 21 + 48 = 127 项检查，另加 25 题检索评测
 npm run eval    # 只跑检索评测（离线，确定性的）
 ```
 
 - `test/smoke.mjs` — 存储、隐私过滤、BM25 检索、实体扩散、supersede 链、蒸馏结果解析
+- `test/schema.mjs` — 设置表单的 schema 和运行时默认值不许漂移：双向比对 `Config({})` 和 `resolveConfig({})` 的每个叶子（只有 `vaultDir` 例外，表单存原始文本、运行时存绝对路径）——表单多一格没用的、少一格看不见的都算失败；另外验证 `transport` 只认那两个值、数值边界、`apiKey` 被标成 secret、所有设置项都出现在投影出来的 schema 里
 - `test/capture.mjs` — 用真实的 `session/event` 形状驱动采集，验证一轮一情节、密钥被拦、短轮不入库、注入消息不入库
 - `test/tools.mjs` — 逐个跑 8 个工具的 `execute` + `render`
-- `test/extract.mjs` — 抽取器：`fetch` 打桩验证 http 路线（提示词构造、key 解析顺序、JSON 解析容错、每张卡片归到自己的项目、游标前进、dry run 不落盘、密钥在写入前被拦住），再用一个假的 `llm` 服务验证 harness 路线（借用设置里的模型与思考档、显式覆盖、没有选中模型时的报错、`finish` 各种终态、空回复、以及全程不碰 `fetch`）
+- `test/extract.mjs` — 抽取器：`fetch` 打桩验证 http 路线（提示词构造、key 解析顺序、JSON 解析容错、每张卡片归到自己的项目、游标前进、dry run 不落盘、密钥在写入前被拦住），再用一个假的 `llm` 服务验证 harness 路线（借用设置里的模型与思考档、显式覆盖、没有选中模型时的报错、`finish` 各种终态、取消、空回复、以及全程不碰 `fetch`）
 
 下面两个测试会真的联网/花钱，所以不在 `npm test` 里，要自己跑：
 
@@ -254,7 +255,7 @@ npm run live             # 真模型端到端：3 条情节 → 蒸馏 → 再�
 npm run live:supersede   # 真模型：先记一条，再让它被"更正"推翻，验证作废链
 ```
 
-它们从 `~/.dsh/.credentials.yaml` 或环境变量取 key（见下文），不写死、不落盘。
+它们从 `~/.dsh/.credentials.yaml` 或环境变量取 key（见下文），不写死、不落盘。这两个脚本跑在普通 `node` 进程里，没有 Harness 的 `llm` 服务可借，所以它们显式用 `transport: 'http'`；插件自己在界面里默认走 harness。
 
 ## 蒸馏实测（真模型跑过，不是估计）
 

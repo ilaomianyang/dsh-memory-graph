@@ -22,6 +22,8 @@ const cfg = resolveConfig({
   vaultDir: dir,
   extractor: {
     enabled: true,
+    // Direct endpoint on purpose: a bare `node` process has no harness llm service.
+    transport: 'http',
     apiKeyEnv: process.env.LIVE_KEY_ENV || 'DEEPSEEK_API_KEY',
     baseUrl: process.env.LIVE_BASE_URL || 'https://api.deepseek.com/v1',
     model: process.env.LIVE_MODEL || 'deepseek-chat',

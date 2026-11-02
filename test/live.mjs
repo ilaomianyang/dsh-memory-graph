@@ -34,6 +34,9 @@ const cfg = resolveConfig({
   vaultDir: dir,
   extractor: {
     enabled: true,
+    // This script talks to an endpoint directly; the plugin's default transport
+    // borrows Settings instead, which a bare `node` process cannot do.
+    transport: 'http',
     apiKeyEnv: process.env.LIVE_KEY_ENV || 'DEEPSEEK_API_KEY',
     baseUrl: process.env.LIVE_BASE_URL || 'https://api.deepseek.com/v1',
     model: process.env.LIVE_MODEL || 'deepseek-chat',

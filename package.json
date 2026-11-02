@@ -34,7 +34,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/smoke.mjs && node test/capture.mjs && node test/tools.mjs && node test/extract.mjs && node eval/run.mjs",
+    "test": "node test/smoke.mjs && node test/schema.mjs && node test/capture.mjs && node test/tools.mjs && node test/extract.mjs && node eval/run.mjs",
     "eval": "node eval/run.mjs",
     "live": "node test/live.mjs",
     "live:supersede": "node test/live-supersede.mjs",

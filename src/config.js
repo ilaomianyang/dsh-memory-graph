@@ -73,7 +73,12 @@ const DEFAULTS = {
     reasoningEffort: '',
     baseUrl: 'https://api.deepseek.com/v1',
     path: '/chat/completions',
-    model: 'deepseek-chat',
+    /**
+     * Empty by default: in harness mode the model comes from Settings, and an
+     * id left here would only be used with `useCurrentModel` off. http mode
+     * fills in `deepseek-chat` at normalisation time.
+     */
+    model: '',
     apiKeyEnv: 'MEMORY_LLM_API_KEY',
     apiKey: '',
     maxOutputTokens: 3000,
