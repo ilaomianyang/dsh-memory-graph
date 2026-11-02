@@ -26,6 +26,8 @@ import { createVault } from './src/vault.js'
 import { registerTools } from './src/tools.js'
 import { registerCapture } from './src/capture.js'
 import { createGraphHandler, GRAPH_PATH } from './src/graphdata.js'
+import { createDistillHandler, DISTILL_PATH } from './src/distillapi.js'
+import { extractorServices } from './src/extract.js'
 
 export const name = 'memory-graph'
 export const inject = ['tools']
@@ -164,12 +166,34 @@ export function apply(ctx, config) {
         requestBody: 'buffered',
         fetch: createGraphHandler({ getVault: () => vault, getConfig: () => cfg }),
       })
-      log('info', `session memory view served at ${GRAPH_PATH}`)
+      // The button's door. Same distillation the `memory_distill` tool runs,
+      // reached from the panel; POST only, so a page load or a prefetch can never
+      // spend model budget by accident.
+      const disposeDistill = registry.register({
+        path: DISTILL_PATH,
+        methods: ['POST'],
+        requestBody: 'buffered',
+        fetch: createDistillHandler({
+          getVault: () => vault,
+          getConfig: () => cfg,
+          getRedactor: () => redactor,
+          getServices: () => extractorServices(ctx),
+          refreshViews: async () => {
+            for (const render of [vault.regenerateReadme, vault.regenerateGraph]) {
+              if (typeof render === 'function') await render.call(vault)
+            }
+          },
+          log,
+        }),
+      })
+      log('info', `session memory view served at ${GRAPH_PATH}, distill at ${DISTILL_PATH}`)
       return () => {
-        try {
-          disposeRoute?.()
-        } catch {
-          // A route already gone is not an error.
+        for (const dispose of [disposeRoute, disposeDistill]) {
+          try {
+            dispose?.()
+          } catch {
+            // A route already gone is not an error.
+          }
         }
       }
     })

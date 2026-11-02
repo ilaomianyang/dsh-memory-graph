@@ -762,23 +762,33 @@ const SESSION_GRAPH = {
 }
 
 /** Run one view render against a stubbed host route. */
-const renderMemoryTab = async ({ language = 'zh-CN', payload = SESSION_GRAPH } = {}) => {
+const renderMemoryTab = async ({
+  language = 'zh-CN',
+  payload = SESSION_GRAPH,
+  payloadAfter = null,
+  distillReply = null,
+} = {}) => {
   const tab = await openMemoryTab(language)
   const calls = []
+  const writes = []
+  let gets = 0
   // The bundle was evaluated inside the sandbox, so its globals ARE the
-  // sandbox: the route stub has to live there, not on this realm.
-  const previousFetch = tab.sandbox.fetch
-  tab.sandbox.fetch = async (url) => {
+  // sandbox: the route stub has to live there, not on this realm. Each call
+  // gets its own sandbox, so the stub can stay installed for a later click.
+  tab.sandbox.fetch = async (url, options) => {
+    const method = (options && options.method) || 'GET'
+    if (method !== 'GET') {
+      writes.push(String(url))
+      return { ok: true, status: 200, json: async () => distillReply ?? { ok: false, reason: 'no stub' } }
+    }
     calls.push(String(url))
-    return { ok: true, status: 200, json: async () => payload }
+    const body = gets === 0 || payloadAfter === null ? payload : payloadAfter
+    gets += 1
+    return { ok: true, status: 200, json: async () => body }
   }
-  try {
-    const view = mount(() => tab.View({ sessionId: 'sess-1' }), tab.runtime)
-    await view.settle()
-    return { ...tab, view, calls }
-  } finally {
-    tab.sandbox.fetch = previousFetch
-  }
+  const view = mount(() => tab.View({ sessionId: 'sess-1' }), tab.runtime)
+  await view.settle()
+  return { ...tab, view, calls, writes }
 }
 
 await check('applying it adds a Memory tab of its own to the Conversation row', async () => {
@@ -858,6 +868,49 @@ await check('an empty card layer says which half is missing', async () => {
   assert.ok(text(note[0]).includes('蒸馏'), 'it points at the step that fills the card layer')
   assert.equal(byClass(noCards.view.tree, 'mgv-node').length, 2, 'the episodes are still drawn')
   noCards.view.unmount()
+})
+
+await check('蒸馏一次 spends one POST, then re-reads the graph with the cards it wrote', async () => {
+  const { view, calls, writes } = await renderMemoryTab({
+    payload: { ...SESSION_GRAPH, counts: { ...SESSION_GRAPH.counts, cards: 0 } },
+    payloadAfter: { ...SESSION_GRAPH, counts: { ...SESSION_GRAPH.counts, cards: 3 } },
+    distillReply: { ok: true, episodes: 12, written: 3, batches: { done: 2, size: 6 } },
+  })
+  const button = byClass(view.tree, 'mgv-distill')
+  assert.equal(button.length, 1, 'the panel offers the button')
+  assert.equal(text(button[0]), '蒸馏一次')
+  assert.equal(writes.length, 0, 'nothing is spent by merely opening the tab')
+  assert.equal(calls.length, 1)
+
+  button[0].props.onClick()
+  await view.settle()
+  await view.settle()
+
+  assert.deepEqual(writes, [client.DISTILL_API], 'exactly one POST, to the host route')
+  assert.equal(calls.length, 2, 'the open panel re-read the graph after the run')
+  const note = byClass(view.tree, 'mgv-distill-note')
+  assert.equal(note.length, 1)
+  assert.ok(text(note[0]).includes('12'), 'how many episodes were read')
+  assert.ok(text(note[0]).includes('3'), 'how many cards came out')
+  // The card layer is no longer empty, so the "no cards yet" hint is gone.
+  assert.equal(byClass(view.tree, 'mgv-distill').length, 1)
+  view.unmount()
+})
+
+await check('a distill that cannot run prints the reason instead of spinning', async () => {
+  const { view, writes } = await renderMemoryTab({
+    distillReply: { ok: false, reason: 'Extractor is disabled. Set config extractor.enabled = true.' },
+  })
+  byClass(view.tree, 'mgv-distill')[0].props.onClick()
+  await view.settle()
+  await view.settle()
+
+  assert.deepEqual(writes, [client.DISTILL_API])
+  const note = byClass(view.tree, 'mgv-distill-note')
+  assert.equal(note.length, 1)
+  assert.ok(text(note[0]).includes('Extractor is disabled'), 'the host reason reaches the screen')
+  assert.equal(byClass(view.tree, 'mgv-node').length > 0, true, 'the graph is still there')
+  view.unmount()
 })
 
 await check('a session with no episodes explains itself instead of drawing', async () => {

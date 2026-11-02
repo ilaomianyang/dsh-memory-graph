@@ -17,6 +17,7 @@
  * because the layout is seeded from the node order, not from `Math.random`.
  */
 import { searchCards } from './search.js'
+import { json } from './http.js'
 
 /** The exact path the host serves and the panel fetches. Authenticated by Connection. */
 export const GRAPH_PATH = '/api/memory-graph.graph'
@@ -456,12 +457,6 @@ export async function buildSessionGraph({ vault, session, project: fallbackProje
  * `json` builds the response by hand rather than with `Response.json`, which
  * only exists on recent Node: the host may run an older one.
  */
-function json(body, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
-  })
-}
 
 export function createGraphHandler({ getVault, getConfig }) {
   return async function handle(request) {

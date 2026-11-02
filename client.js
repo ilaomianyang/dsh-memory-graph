@@ -24,9 +24,10 @@
 const PACKAGE_NAME = '@local/dsh-memory-graph'
 const HOST_ENTRY_ID = 'memory-graph'
 const STYLE_ID = 'dsh-memory-graph-settings-css'
-/** The Conversation view cell this plugin adds, and the host route it reads. */
+/** The Conversation view cell this plugin adds, and the host routes it reads. */
 const GRAPH_VIEW_ID = 'memory-graph'
 const GRAPH_API = '/api/memory-graph.graph'
+const DISTILL_API = '/api/memory-graph.distill'
 
 const ZH = (() => {
   try {
@@ -687,6 +688,14 @@ const CSS = `
   background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.04));
   border-bottom: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.08));
 }
+.mgv-note-ok {
+  color: var(--dsw-alias-state-success-primary, #1a7f37);
+  background: rgba(26, 127, 55, 0.07);
+}
+.mgv-note-err {
+  color: var(--dsw-alias-state-error-primary, #c62828);
+  background: rgba(198, 40, 40, 0.06);
+}
 .mgv-body { display: flex; flex: 1 1 auto; min-height: 0; }
 .mgv-canvas { flex: 1 1 auto; min-width: 0; display: block; touch-action: none; }
 .mgv-link { stroke: var(--dsw-alias-border-l1, rgba(0, 0, 0, 0.16)); stroke-width: 1; }
@@ -1283,6 +1292,8 @@ function createGraphView(ctx, React) {
     const [data, setData] = useState(null)
     const [error, setError] = useState('')
     const [busy, setBusy] = useState(false)
+    const [distilling, setDistilling] = useState(false)
+    const [distillNote, setDistillNote] = useState(null)
     const [selectedKey, setSelectedKey] = useState('')
     const [hoverKey, setHoverKey] = useState('')
     const ticket = useRef(0)
@@ -1330,6 +1341,7 @@ function createGraphView(ctx, React) {
       setError('')
       setSelectedKey('')
       setHoverKey('')
+      setDistillNote(null)
       if (sessionId === '') return undefined
       load(false)
       // The graph changes when you talk, distill, or edit a card elsewhere. A
@@ -1366,6 +1378,56 @@ function createGraphView(ctx, React) {
     const near = neighbours.get(focus)
     const selected = (selectedKey !== '' && byKey.get(selectedKey)) || null
 
+    /**
+     * Run one distillation and then re-read the graph.
+     *
+     * This is the only place in the panel that spends anything: the button posts
+     * to the host, the host runs the same `distill()` the `memory_distill` tool
+     * runs. Nothing is distilled unless somebody presses it — capture is passive,
+     * and a background model call the user did not ask for would be a surprise
+     * bill.
+     */
+    const distillNow = useCallback(() => {
+      if (distilling) return
+      setDistilling(true)
+      setDistillNote(null)
+      return fetch(apiUrl(DISTILL_API), {
+        method: 'POST',
+        headers: { accept: 'application/json' },
+        credentials: 'same-origin',
+      })
+        .then((response) =>
+          response
+            .json()
+            .catch(() => null)
+            .then((body) => ({ response, body })),
+        )
+        .then(({ response, body }) => {
+          if (!mounted.current) return
+          if (body && body.busy === true) {
+            setDistillNote({ kind: 'err', text: t('已经有一次蒸馏在跑，等它结束。', 'A distillation is already running; let it finish.') })
+          } else if (!body || body.ok !== true) {
+            const why = (body && (body.message || body.reason)) || `HTTP ${response.status}`
+            setDistillNote({ kind: 'err', text: String(why) })
+          } else if ((body.episodes ?? 0) === 0) {
+            setDistillNote({ kind: 'ok', text: String(body.reason || t('没有新情节要蒸馏。', 'Nothing new to distill.')) })
+          } else {
+            const batches = body.batches && body.batches.done > 1 ? t(` · ${body.batches.done} 批`, ` · ${body.batches.done} batches`) : ''
+            setDistillNote({
+              kind: 'ok',
+              text: t(`读出 ${body.episodes} 条情节 → ${body.written} 张卡片${batches}`, `read ${body.episodes} episodes → ${body.written} cards${batches}`),
+            })
+          }
+          setDistilling(false)
+          load(true)
+        })
+        .catch((failure) => {
+          if (!mounted.current) return
+          setDistillNote({ kind: 'err', text: String((failure && failure.message) || failure) })
+          setDistilling(false)
+        })
+    }, [distilling, load])
+
     const head = h(
       'div',
       { className: 'mgv-head' },
@@ -1391,6 +1453,20 @@ function createGraphView(ctx, React) {
         h('span', null, h('i', { className: 'mgv-dot', style: { background: EPISODE_FILL } }), t('情节', 'episode')),
         h('span', null, h('i', { className: 'mgv-dot', style: { background: KIND_FILL.decision } }), t('卡片', 'card')),
         h('span', null, h('i', { className: 'mgv-dot', style: { background: ENTITY_FILL } }), t('实体', 'entity')),
+      ),
+      h(
+        'button',
+        {
+          type: 'button',
+          className: 'mg-btn-ghost mgv-distill',
+          disabled: distilling || sessionId === '',
+          title: t(
+            '把还没蒸馏的情节变成卡片（借设置里选中的模型，会花它的额度）',
+            'Turn undistilled episodes into cards, borrowing the model selected in Settings (it spends that model budget)',
+          ),
+          onClick: distillNow,
+        },
+        distilling ? t('蒸馏中…', 'Distilling…') : t('蒸馏一次', 'Distill now'),
       ),
       h(
         'button',
@@ -1461,6 +1537,12 @@ function createGraphView(ctx, React) {
       'div',
       { className: 'mgv-root' },
       head,
+      // What the last press of 蒸馏一次 did: a count, "nothing new", or why it
+      // could not run. Printed as a line rather than a toast because the numbers
+      // are worth reading twice.
+      distillNote
+        ? h('div', { className: `mgv-note mgv-note-${distillNote.kind} mgv-distill-note` }, distillNote.text)
+        : null,
       // An empty half of the picture should say which half is missing: with no
       // cards in the vault the graph can only ever show episodes, and that reads
       // as "broken" unless it is spelled out.
@@ -1643,7 +1725,7 @@ if (typeof window === 'undefined' || !window.__ModuleLoader__ || typeof window._
   // Plain Node import (tests, schema tooling): publish what the suite needs and
   // touch nothing else. Headless by design — no document, no styles.
   globalThis.__memoryGraphFormSpec = FORM_SPEC
-  globalThis.__memoryGraphClient = { FORM_SPEC, createPage, createGraphView, registerSlots, ensureStyle, PACKAGE_NAME, HOST_ENTRY_ID, STYLE_ID, GRAPH_API, GRAPH_VIEW_ID }
+  globalThis.__memoryGraphClient = { FORM_SPEC, createPage, createGraphView, registerSlots, ensureStyle, PACKAGE_NAME, HOST_ENTRY_ID, STYLE_ID, GRAPH_API, DISTILL_API, GRAPH_VIEW_ID }
 } else {
   window.__ModuleLoader__.load({
     id: PACKAGE_NAME,
@@ -1667,6 +1749,7 @@ if (typeof window === 'undefined' || !window.__ModuleLoader__ || typeof window._
       exports.formSpec = FORM_SPEC
       exports.createGraphView = createGraphView
       exports.GRAPH_API = GRAPH_API
+      exports.DISTILL_API = DISTILL_API
       exports.GRAPH_VIEW_ID = GRAPH_VIEW_ID
       return module.exports
     },

@@ -223,6 +223,25 @@ export function selectionEffort(selection) {
 }
 
 /**
+ * The two harness services a harness-transport distillation borrows: the `llm`
+ * caller, and whatever model 设置 → 模型 has selected right now.
+ *
+ * Both are optional on purpose. A profile without them still runs the plugin —
+ * the http transport needs neither, and the harness transport reports what is
+ * missing instead of throwing. Resolved at call time, so switching models in
+ * Settings takes effect on the next run.
+ */
+export function extractorServices(ctx) {
+  try {
+    const llm = ctx?.get?.('llm', false) ?? undefined
+    const selection = ctx?.get?.('agentDefaultModel', false)?.currentSelection?.() ?? undefined
+    return { llm, selection }
+  } catch {
+    return { llm: undefined, selection: undefined }
+  }
+}
+
+/**
  * The route one harness-transport call takes: the provider/model pair chosen in
  * this plugin's settings, or the model currently selected in Settings → Models.
  * Reusing that selection is the whole point of the harness transport: the route,

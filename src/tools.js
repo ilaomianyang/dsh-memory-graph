@@ -7,7 +7,7 @@
  */
 import path from 'node:path'
 import { searchCards, timelineCards } from './search.js'
-import { distill, resolveRoute } from './extract.js'
+import { distill, extractorServices, resolveRoute } from './extract.js'
 import { CARD_KINDS, CONFIDENCE, slugify } from './vault.js'
 
 const OUTPUT_SCHEMA = { type: 'object', additionalProperties: true }
@@ -54,15 +54,6 @@ function formatHits(hits) {
  * without them the extractor can still post to an endpoint itself, so their
  * absence is a reason to report, never to fail the surrounding operation.
  */
-function extractorServices(ctx) {
-  try {
-    const llm = ctx.get?.('llm', false) ?? undefined
-    const selection = ctx.get?.('agentDefaultModel', false)?.currentSelection?.() ?? undefined
-    return { llm, selection }
-  } catch {
-    return { llm: undefined, selection: undefined }
-  }
-}
 
 /** One line describing what a distill call would do right now, for memory_stats. */
 function describeExtractor(ctx, cfg) {
