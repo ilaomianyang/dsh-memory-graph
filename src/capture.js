@@ -53,15 +53,35 @@ function truncate(text, max) {
 }
 
 export function registerCapture(ctx, { cfg, vault, redactor }) {
-  if (!cfg.capture.enabled) return []
-
   const buffers = new Map()
   const disposers = []
   const timers = new Map()
-  const skipRules = (cfg.capture.skipPatterns ?? []).map((p) => new RegExp(p, 'i'))
+
+  // Both the switch and the skip list are editable while the plugin runs (they
+  // are `.volatile()` in the schema), so neither is baked in here: the switch is
+  // read per event, and the compiled rules are rebuilt only when the list's text
+  // actually changes — a `new RegExp` on every token would be pure waste.
+  let skipKey
+  let skipRules = []
+
+  function compiledSkipRules() {
+    const list = cfg.capture.skipPatterns ?? []
+    const key = list.join('\u0000')
+    if (key !== skipKey) {
+      skipKey = key
+      skipRules = list.flatMap((pattern) => {
+        try {
+          return [new RegExp(pattern, 'i')]
+        } catch {
+          return []
+        }
+      })
+    }
+    return skipRules
+  }
 
   /** True when the "user" side is really a harness injection, not a person typing. */
-  const injected = (text) => text !== '' && skipRules.some((re) => re.test(text))
+  const injected = (text) => text !== '' && compiledSkipRules().some((re) => re.test(text))
 
   const idOf = (session) => String(session?.id ?? session?.header?.id ?? 'unknown')
 
@@ -126,6 +146,10 @@ export function registerCapture(ctx, { cfg, vault, redactor }) {
 
   disposers.push(
     ctx.on('session/event', (session, event) => {
+      // The switch is read here, not at registration: turning capture off in
+      // 设置 must stop writes immediately without unregistering the listener.
+      if (!cfg.capture.enabled) return
+
       const type = event?.type
 
       // A turn is the natural write unit: flush it as soon as it closes, so an

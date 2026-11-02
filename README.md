@@ -4,7 +4,9 @@
 
 给 DeepSeek Harness 的**长期联想记忆**插件。上下文压缩会把东西真的抹掉；这个插件在上下文之外留一层持久的、可读的、属于你自己的记忆。
 
-纯 Node ESM，不需要构建。唯一的运行依赖是 Harness 自带的 `@deepseek-ai/schemastery`——设置表单就是它渲染出来的；没装这个依赖时插件照常跑，只是没有表单。
+配置在 **设置 → 记忆图谱** 里，一页四组，改完即生效。
+
+纯 Node ESM，不需要构建。唯一的运行依赖是 Harness 自带的 `@deepseek-ai/schemastery`——它提供配置的 schema，设置页读的就是它投影出来的那份值；没装这个依赖时插件照常跑，只是「记忆图谱」这一页不会出现在侧栏。
 
 ---
 
@@ -62,11 +64,11 @@ SQLite 需要处理锁和二进制合并，纯文本可以直接读、直接 gre
 plugin_manager action=install_bundle target="<本仓库绝对路径>"
 ```
 
-`install_bundle` 用 `link:` 方式装本地目录，**不会**替你装依赖，所以先在这个仓库里跑一次 `npm install`（只有一个包）。不装也能用，只是设置里看不到表单。
+`install_bundle` 用 `link:` 方式装本地目录，**不会**替你装依赖，所以先在这个仓库里跑一次 `npm install`（只有一个包）。不装也能用，只是设置里看不到那一页。
 
-装完默认 `vaultDir` 是 `~/dsh-memory`，插件激活时会自动建目录和空文件。安装结果是热生效的，但**改完插件源码后需要重启 Harness** 才会加载新的 JavaScript 模块代——包括这次新增的 `Config` schema。
+**装完要重启一次 Harness**（关掉窗口重开）。原因不是偷懒：Web 侧的插件清单是启动时扫一遍运行中的 loader 条目、读各自 `package.json` 的 `dsh.client` 字段定下的，这份扫描结果在进程里有缓存，之后不会再读第二遍。所以新装、或者改了 `client.js` / `package.json`，都得让进程重来一次；装完不重启，侧栏里不会有「记忆图谱」，而你手上不会有任何报错提示。
 
-卸载：`plugin_manager action=remove_bundle target="@local/dsh-memory-graph"`。**记忆库不会被删**，它在 `~/dsh-memory`，独立于插件。
+重启后打开 **设置 → 记忆图谱**（在「模型」和「内置插件」之间）。卸载：`plugin_manager action=remove_bundle target="@local/dsh-memory-graph"`。**记忆库不会被删**，它在 `~/dsh-memory`，独立于插件。
 
 ## 你的记忆库长什么样
 
@@ -88,10 +90,13 @@ plugin_manager action=install_bundle target="<本仓库绝对路径>"
 
 ## 配置
 
-两种写法，效果完全一样，改哪一个都行：
+**设置 → 记忆图谱**。这个插件在 Settings 的侧栏里自带一页，四组：采集 / 隐私 / 抽取器 / 检索。每项都有中英文说明，改完按「保存」即时生效，不用重启、不用重载。
 
-1. **设置界面**：DSH 的 Settings → 插件 → memory-graph。表单里的每一项都带中英文说明，改了即时生效。
-2. **profile 的 `cordis.patch.yml`**：适合写进版本库、或者用变量拼出配置。
+- 改过的字段带「已改」标记，点旁边的「恢复默认」退回默认值（不是清空成空串）。
+- 保存被拒会直接说原因（数字越界、宿主刚被别处改过），不会悄悄吞掉。
+- 抽取器那一组跟着你选的路线走：`transport` 选 `harness` 只看模型相关的几项，选 `http` 才出现 endpoint / key。
+
+**四个不在这页上的键**：总开关 `enabled`、记忆库目录 `vaultDir`、默认项目名 `defaultProject`、跨项目连接 `crossProject`。它们在插件启动时就被读掉了（决定库在哪、按哪个项目归档、要不要连跨项目实体），改它们要重载插件，所以留在 profile 的 `cordis.patch.yml` 里手写。同一行的 `config` 下也能写页面上的那些项——**YAML 是最终事实**，两边改都行：
 
 ```yaml
 - id: memory-graph
@@ -114,26 +119,43 @@ plugin_manager action=install_bundle target="<本仓库绝对路径>"
       hops: 1
 ```
 
-| 键 | 默认 | 说明 |
-| --- | --- | --- |
-| `vaultDir` | `~/dsh-memory` | 记忆库位置，支持 `~` |
-| `capture.enabled` | `true` | 是否自动追加原始事件 |
-| `capture.includeToolOutput` | `false` | 是否记录工具调用计数（不记录内容） |
-| `capture.skipPatterns` | 3 条内置 | 老版本日志没有来源标记时的兜底正则 |
-| `privacy.useDefaultPatterns` | `true` | 内置密钥/私钥/token 规则 |
-| `privacy.denyPatterns` | `[]` | 追加你自己的正则，支持 `(?i)` 前缀 |
-| `extractor.enabled` | `false` | 关闭时只采集不蒸馏，不产生任何模型调用 |
-| `extractor.transport` | `harness` | `harness` = 借用设置里的模型；`http` = 自己填 endpoint 直连 |
-| `extractor.useCurrentModel` | `true` | harness 模式下是否跟随当前选中的模型 |
-| `extractor.provider` | `''` | harness 模式：关掉「跟随」后指定提供商 id |
-| `extractor.reasoningEffort` | `''` | harness 模式：思考强度，留空则沿用设置里的那一档 |
-| `extractor.baseUrl` | `https://api.deepseek.com/v1` | http 模式：任何 OpenAI 兼容端点 |
-| `extractor.path` | `/chat/completions` | http 模式：路径 |
-| `extractor.model` | `deepseek-chat` | http 模式：模型 id |
-| `extractor.apiKeyEnv` | `MEMORY_LLM_API_KEY` | http 模式：key 从这个环境变量名的来源里找 |
-| `extractor.temperature` | `0.1` | 仅 http 模式：harness 模式下采样由被借用的模型设置决定 |
-| `extractor.maxEpisodesPerRun` | `40` | 一次蒸馏最多喂多少条情节 |
-| `retrieval.hops` | `1` | 联想扩散跳数，0 = 只做关键词 |
+| 键 | 默认 | 说明 | 在设置页 |
+| --- | --- | --- | --- |
+| `enabled` | `true` | 总开关，关掉就是彻底不加载 | — |
+| `vaultDir` | `~/dsh-memory` | 记忆库位置，支持 `~` | — |
+| `defaultProject` | `shared` | 会话没有 cwd 时归档到哪个项目 | — |
+| `crossProject` | `true` | 新卡片是否连进项目实体枢纽 | — |
+| `capture.enabled` | `true` | 是否自动追加原始事件 | ✓ |
+| `capture.userChars` | `1500` | 你每条消息最多存多少字，超出截断 | ✓ |
+| `capture.assistantChars` | `1500` | 助手每条回复最多存多少字 | ✓ |
+| `capture.includeToolOutput` | `false` | 是否记录工具名与调用次数（**不记录内容**） | ✓ |
+| `capture.minChars` | `12` | 短于这个字数的轮次不入库（"好""继续"这类） | ✓ |
+| `capture.skipPatterns` | 3 条内置 | 老版本日志没有来源标记时的兜底正则 | ✓ |
+| `privacy.useDefaultPatterns` | `true` | 内置密钥/私钥/token 规则 | ✓ |
+| `privacy.denyPatterns` | `[]` | 追加你自己的正则，支持 `(?i)` 前缀 | ✓ |
+| `privacy.redactEmails` | `true` | 邮箱替换成 `[email]` | ✓ |
+| `privacy.redactPaths` | `true` | 家目录替换成 `~` | ✓ |
+| `extractor.enabled` | `false` | 关闭时只采集不蒸馏，不产生任何模型调用 | ✓ |
+| `extractor.transport` | `harness` | `harness` = 借用设置里的模型；`http` = 自己填 endpoint 直连 | ✓ |
+| `extractor.useCurrentModel` | `true` | harness 模式下是否跟随当前选中的模型 | ✓ |
+| `extractor.provider` | `''` | harness 模式：关掉「跟随」后指定提供商 id | ✓ |
+| `extractor.reasoningEffort` | `''` | harness 模式：思考强度，留空则沿用设置里的那一档 | ✓ |
+| `extractor.maxEpisodesPerRun` | `40` | 一次蒸馏最多喂多少条情节 | ✓ |
+| `extractor.maxOutputTokens` | `3000` | 单次蒸馏输出上限 | ✓ |
+| `extractor.timeoutMs` | `90000` | 单次调用超时 | ✓ |
+| `extractor.baseUrl` | `https://api.deepseek.com/v1` | http 模式：任何 OpenAI 兼容端点 | ✓（http） |
+| `extractor.path` | `/chat/completions` | http 模式：路径 | ✓（http） |
+| `extractor.model` | `''` | 模型 id；http 模式留空即 `deepseek-chat` | ✓（http） |
+| `extractor.apiKeyEnv` | `MEMORY_LLM_API_KEY` | http 模式：key 从这个环境变量名的来源里找 | ✓（http） |
+| `extractor.apiKey` | `''` | http 模式：直接写 key（不推荐，见下） | ✓（http） |
+| `extractor.temperature` | `0.1` | 仅 http 模式：harness 模式下采样由被借用的模型设置决定 | ✓（http） |
+| `retrieval.limit` | `8` | 一次检索最多返回几张卡片 | ✓ |
+| `retrieval.hops` | `1` | 联想扩散跳数，0 = 只做关键词 | ✓ |
+| `retrieval.snippetChars` | `320` | 每条结果给模型看多少字摘要 | ✓ |
+| `retrieval.timelineLimit` | `20` | `memory_timeline` 默认回看多少条 | ✓ |
+
+为什么只有这 28 个能在这页改？Harness 的设置机制只投影**声明为 volatile 的字段**，也就是"每次用到时才读"的那些。上面带 ✓ 的都是这种：改一次，下一次调用就换了。而 `enabled` / `vaultDir` / `defaultProject` / `crossProject` 是在激活时消费的，改了得重载插件，所以不放进页面装样子——页面底部会直接把这件事写出来，而不是给你几个点了没反应的开关。
+
 
 ### 抽取器接在哪：两条路
 
@@ -150,7 +172,7 @@ plugin_manager action=install_bundle target="<本仓库绝对路径>"
 
 抽取器完全独立，用自己的端点、模型和额度。适合：抽取想用一个别处的小模型、想接到自建网关、或者这个 Harness 构建里没有暴露 `llm` 服务。
 
-设置表单里也有 `extractor.apiKey` 一栏，但你**最好别用它**：表单里填的值会明文落进 profile 的配置里。用 `apiKeyEnv` 指个名字、把值放进环境变量或 `~/.dsh/.credentials.yaml`，是这个插件设计上的默认路线。
+设置页里也有 `extractor.apiKey` 一栏（密码框，不回显已存的值），但你**最好别用它**：填进去的值会明文落进 profile 的配置里。用 `apiKeyEnv` 指个名字、把值放进环境变量或 `~/.dsh/.credentials.yaml`，是这个插件设计上的默认路线。
 
 ### http 模式的 key 从哪来
 
@@ -198,7 +220,7 @@ plugin_manager action=install_bundle target="<本仓库绝对路径>"
 
 ![记忆图深色模式](docs/graph-dark.png)
 
-一个明确的边界：这是一个**静态文件**，不是 DSH Web GUI 里的面板。做面板要写 client 插件（打包、注入 slot），那不是零依赖能换来的东西，所以先把「能看」做出来。
+一个明确的边界：`graph.html` 是**静态文件**，不是 Web GUI 里的实时面板。GUI 里现在有这一页设置（`client.js`，手写 `__ModuleLoader__` factory，没有构建步骤、没有 JSX），但图本身没搬进去——面板要画图、要订阅库变更、要处理缩放和悬停，那是另一个量级的工作。先把「能配」搬进 GUI，「能看」还是这个静态页。
 
 ## 跨项目是什么意思
 
@@ -238,12 +260,13 @@ Harness 会把运行时快照、技能目录、时间戳、审批通知、压缩
 零依赖，不联网，不碰真实记忆库：
 
 ```bash
-npm test        # 38 + 9 + 11 + 21 + 48 = 127 项检查，另加 25 题检索评测
+npm test        # 38 + 13 + 17 + 11 + 21 + 48 = 148 项检查，另加 25 题检索评测
 npm run eval    # 只跑检索评测（离线，确定性的）
 ```
 
 - `test/smoke.mjs` — 存储、隐私过滤、BM25 检索、实体扩散、supersede 链、蒸馏结果解析
-- `test/schema.mjs` — 设置表单的 schema 和运行时默认值不许漂移：双向比对 `Config({})` 和 `resolveConfig({})` 的每个叶子（只有 `vaultDir` 例外，表单存原始文本、运行时存绝对路径）——表单多一格没用的、少一格看不见的都算失败；另外验证 `transport` 只认那两个值、数值边界、`apiKey` 被标成 secret、所有设置项都出现在投影出来的 schema 里
+- `test/schema.mjs` — 设置页和运行时不许漂移：双向比对 `Config({})` 和 `resolveConfig({})` 的每个叶子（只有 `vaultDir` 例外，页面存原始文本、运行时存绝对路径）——页面多一格没用的、少一格看不见的都算失败；另外验证 `transport` 只认那两个值、数值边界、`apiKey` 被标成 secret、28 个 volatile 叶子正好等于页面的字段表、四个结构键不许出现在页面字段表里
+- `test/client.mjs` — 把设置页挂在一个够用的 React 替身上跑：页面画出的控件 = 该显示的字段、切换 `transport` 后 http 那几项才出现、空的内联 key 不会被当成"删除"发出去、越界的数字到不了线上、宿主拒绝后清空草稿并报错、「恢复默认」发的是 `unset` 而不是 `set`、样式表只有一个带包名标记的 `<style>`、`client.js` 里不许出现 `export`/`import`（loader 按脚本求值）
 - `test/capture.mjs` — 用真实的 `session/event` 形状驱动采集，验证一轮一情节、密钥被拦、短轮不入库、注入消息不入库
 - `test/tools.mjs` — 逐个跑 8 个工具的 `execute` + `render`
 - `test/extract.mjs` — 抽取器：`fetch` 打桩验证 http 路线（提示词构造、key 解析顺序、JSON 解析容错、每张卡片归到自己的项目、游标前进、dry run 不落盘、密钥在写入前被拦住），再用一个假的 `llm` 服务验证 harness 路线（借用设置里的模型与思考档、显式覆盖、没有选中模型时的报错、`finish` 各种终态、取消、空回复、以及全程不碰 `fetch`）
@@ -300,7 +323,8 @@ npm run eval
 - harness 模式借的是「设置里当前选中的那个模型」，所以你在对话里换模型，抽取也跟着换；想钉死一个抽取专用模型就把 `useCurrentModel` 关掉。另外它花的是同一个模型提供商的额度，不会因为"插件"就变免费。
 - 图视图是**静态 HTML**（`graph.html`），不是 DSH Web GUI 里的面板；要面板得单独写 client 插件。
 - 卡片去重只按"同项目 + 标题归一化相同"，措辞不同的近义卡片会被存成两张。
-- 设置表单是 schemastery 生成的通用表单：字段有中英文说明，但**没有分组标题、没有自定义控件**，`skipPatterns` / `denyPatterns` 这种数组只能一行一条地编辑。要更好看的配置界面得自己写 client 侧的面板。
+- 设置页是四张写死的分组卡片 + 一张手写字段表，不是对 schema 的通用反射；`test/schema.mjs` 负责保证两边一致——改了 schema 却忘了改字段表，结果是测试挂掉，而不是页面上多出一个控件。`skipPatterns` / `denyPatterns` 仍然是多行文本框一行一条。
+- 页面**不轮询**：配置在别处（手改 YAML、另一个窗口）被改过之后，页面要等下一次保存往返才会重读；你未保存的草稿会被保留。
 - 采集粒度是一轮（`turn/end` 触发落盘），不是一条一条消息；一轮里的多次工具调用只记次数不记内容。连续多步的长轮次只留前 6 段可见文本。
 - 记忆库自带 `.gitignore`（忽略 `*.tmp`、系统垃圾文件和 `.distill-state.json`）；后者是每台机器各自的蒸馏游标，同步到另一台机器会重新蒸馏一遍，靠标题去重兜底。
 

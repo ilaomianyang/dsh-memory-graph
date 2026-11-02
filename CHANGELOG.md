@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.0 — 2026-11-02
+
+真正的设置页：插件在 **设置 → 记忆图谱** 里有自己的一页，四组、28 个字段，保存即生效。
+
+**Added**
+
+- `client.js`：手写 `window.__ModuleLoader__.load` factory 的浏览器侧 bundle，零构建、零 JSX、只 `require('react')`。往 `settings.section` 槽注册一页（id `memory-graph`，order 25，在「模型」和「内置插件」之间），四张分组卡片：采集 / 隐私 / 抽取器 / 检索。
+- 每个字段都带中英文说明、单位、占位符和边界；改过的字段打「已改」标，旁边的「恢复默认」发的是 `unset`（退回继承层），不是把值写成空串。
+- 底部粘着一条保存栏：未保存改动数、保存中、成功/失败提示；宿主只读时保存按钮直接禁用。保存被拒（`mutate` 返回 `false`）会清空草稿并提示"配置刚被别处改过"，而不是假装成功。
+- 抽取器那一组跟着路线走：`transport: 'harness'` 只显示模型相关的几项，选 `http` 才出现 endpoint / 路径 / key / temperature，`useCurrentModel` 与 `provider` 反过来隐藏。切换在下一次保存前就能看到效果（可见性用草稿值算，不是等回读）。
+- 页面底部写明哪四项不在这页上（总开关 / 记忆库目录 / 默认项目 / 跨项目连接）、为什么、以及去 `cordis.patch.yml` 的哪一行改。
+- `test/client.mjs`（17 项）：用一个最小 React 替身把页面真挂起来跑——控件与字段表一致、`transport` 切换后 http 项才出现、空的内联 key 不会被当成"删除"发出去、越界数字到不了线上、宿主拒绝后清空草稿并报错、`unset` 与 `set` 不混用、样式表只有一个带包名标记的 `<style>`、`client.js` 里不许有 `export`/`import`（loader 按脚本求值）。
+- `package.json`：新增 `exports["./client"]`、`dsh.client = { platform: 'web', inject: [] }`，`files` 带上 `client.js`。
+
+**Fixed**
+
+- **设置里一直没有这个插件的根因**：`@deepseek-ai/dsh-settings` 的 `describe()` 只投影声明为 `.volatile()` 的字段（`volatileForm(schema)` 拿不到 volatile 叶子就返回 `undefined`，整个条目被跳过）。0.3.0 导出的 `Config` 是对的，但 32 个叶子全是普通字段，所以永远不显示。现在 28 个"调用时才读"的字段标了 `.volatile()`，`enabled` / `vaultDir` / `defaultProject` / `crossProject` 保持普通（它们在激活期被消费，改了本来就是重载）。
+- volatile 写入只走 `loader/volatile-update`、**不会重跑 `apply`**，所以三处快照都得跟着改，否则"即时生效"只是页面上的假象：`capture.enabled` 从注册期提前返回改成每条事件判断；`createRedactor` 在 volatile 更新时重建；`skipRules` 惰性重编译。
+- `src/config.js` 新增 `unwrapConfig`：volatile 字段到达 `apply` 时是引用对象（`{[Symbol.for('cosmokit.volatile.write')]: fn, get: fn}`），直接 `{...DEFAULTS, ...config}` 会静默得到默认值加一个 `get` 函数。
+
+**Changed**
+
+- 配置入口从「schemastery 的通用表单」换成自己的页面；README / README.en 的「配置」一节重写（四组、默认值表、哪些键不在这页上、为什么）。
+- **装完、或改过 `client.js` / `package.json` 之后必须重启一次 Harness**：Web 侧的插件清单是启动时扫一遍 loader 条目、读各自 `package.json` 的 `dsh.client` 定的，这份扫描结果在进程里缓存、不再重读。README 里写清了，免得装完以为插件坏了。
+- 测试口径：`npm test` 148 项检查（38 + 13 + 17 + 11 + 21 + 48）。
+
 ## 0.3.0 — 2026-11-02
 
 设置界面 + 直接复用设置里已经配好的模型。

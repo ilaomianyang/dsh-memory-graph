@@ -9,6 +9,16 @@
  * explicit — the agent asks — so nothing is injected into a turn that does not
  * need it. Storage is plain files under one directory: readable, portable,
  * greppable, and owned by the user.
+ *
+ * Configuration has two doors. The profile's `cordis.patch.yml` is the durable
+ * record (hand-written, or written by 设置 → 记忆图谱); the fields marked
+ * `.volatile()` in `src/schema.js` can also be edited there while the plugin
+ * runs. A volatile-only write does not remount the plugin: the Loader updates the
+ * live references in place and emits `loader/volatile-update`, and `cfg` below is
+ * refreshed in place so every reader of `cfg.a.b` — capture, tools, extraction,
+ * search — sees the new value on its next call. Structural knobs (`enabled`,
+ * `vaultDir`) stay ordinary on purpose: they are consumed once, so changing one
+ * re-activates the plugin, which is the semantics it needs.
  */
 import { resolveConfig } from './src/config.js'
 import { createRedactor } from './src/privacy.js'
@@ -22,11 +32,11 @@ export const inject = ['tools']
 /**
  * Settings-form schema.
  *
- * The harness draws a plugin's Settings form from the schema it exports, and it
+ * The harness draws a plugin's page in 设置 from the schema it exports, and it
  * builds that schema with its own schemastery. So this one import is the only
  * dependency the plugin has; it is loaded opportunistically so a checkout that
- * never ran `npm install` still works — it just has no form and runs on the
- * defaults in `src/config.js`.
+ * never ran `npm install` still works — it just has no Settings page and runs on
+ * the defaults in `src/config.js`.
  */
 let Config
 try {
@@ -36,11 +46,49 @@ try {
 }
 export { Config }
 
+/**
+ * A redactor whose rules can be replaced while it is in use.
+ *
+ * Handing the plain `createRedactor` result to the vault, the tools and the
+ * extractor would freeze the privacy rules at activation time, because they hold
+ * that object. This wrapper forwards every call to the rules that are current
+ * now, so editing `privacy.*` in 设置 applies to the next string written instead
+ * of the next restart.
+ */
+function createLiveRedactor(cfg) {
+  let current = createRedactor(cfg.privacy)
+  return {
+    redact: (text, where) => current.redact(text, where),
+    get ruleCount() {
+      return current.ruleCount
+    },
+    rebuild() {
+      current = createRedactor(cfg.privacy)
+    },
+  }
+}
+
 export function apply(ctx, config) {
   const cfg = resolveConfig(config)
+  const redactor = createLiveRedactor(cfg)
+
+  // Re-resolving in place, rather than re-running apply, is what makes a Settings
+  // write land: every consumer holds this one `cfg` object and reads `cfg.a.b` at
+  // call time, so the new values are live with no other file touched. A change to
+  // an ordinary field still remounts the plugin, which is when this listener is
+  // rebuilt against the new activation.
+  ctx.on('loader/volatile-update', () => {
+    try {
+      Object.assign(cfg, resolveConfig(config))
+      redactor.rebuild()
+    } catch {
+      // A half-written config must not break the running plugin: a stale
+      // snapshot is better than a throw on every edit.
+    }
+  })
+
   if (!cfg.enabled) return
 
-  const redactor = createRedactor(cfg.privacy)
   const vault = createVault(cfg, redactor)
 
   const log = (level, message) => {
@@ -76,7 +124,7 @@ export function apply(ctx, config) {
 
   ctx.effect(() => {
     const disposers = registerCapture(ctx, { cfg, vault, redactor })
-    if (cfg.capture.enabled) log('info', 'episode capture is on')
+    log('info', `episode capture registered (${cfg.capture.enabled ? 'on' : 'off'})`)
     return () => {
       for (const dispose of disposers) {
         try {

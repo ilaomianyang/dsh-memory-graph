@@ -6,7 +6,9 @@ Long-term **associative memory** for [DeepSeek Harness](https://getartcraft.com)
 
 Context compaction quietly deletes things. This plugin keeps a second layer — outside the context window, on your own disk, readable by you — so that a decision you made three months ago can still be found.
 
-Plain Node ESM, no build step. The only third-party dependency is the harness's own `@deepseek-ai/schemastery`, which renders the Settings form; without it the plugin runs on defaults and simply has no form.
+Plain Node ESM, no build step. Its configuration lives in **Settings → Memory Graph**, four groups on one page, applied on save.
+
+The only third-party dependency is the harness's own `@deepseek-ai/schemastery`, which supplies the config schema (the page reads the value projected from it); without it the plugin still runs and the Memory Graph page simply does not appear.
 
 ---
 
@@ -62,11 +64,13 @@ backed up directly.
 plugin_manager action=install_bundle target="<absolute path to this repo>"
 ```
 
-`install_bundle` links a local directory with `link:`, which does **not** install the package's dependencies, so run `npm install` once in this repo (it is a single package). Without it the plugin still runs — there is simply no Settings form.
+`install_bundle` links a local directory with `link:`, which does **not** install the package's dependencies, so run `npm install` once in this repo (it is a single package). Without it the plugin still runs — there is simply no Memory Graph page in Settings.
 
 The vault defaults to `~/dsh-memory` and is created on activation.
 
-Installation is hot, but **changing this plugin's source requires restarting Harness** to load a fresh module generation — including the `Config` schema added for the Settings form.
+**Restart Harness once after installing** (close the window and reopen it). Not out of laziness: the web-side plugin manifest is composed by scanning the running loader's entries at startup and reading each package's `dsh.client` field, and that scan is cached in the process — it is never repeated. So a fresh install, or any edit to `client.js` or `package.json`, needs a new process; install without restarting and the sidebar simply has no Memory Graph entry, with no error anywhere to tell you why.
+
+After the restart it is **Settings → Memory Graph**, between Models and Plugins.
 
 Uninstall with `plugin_manager action=remove_bundle target="@local/dsh-memory-graph"`. The vault is not touched — it lives in `~/dsh-memory`, independent of the plugin.
 
@@ -92,10 +96,13 @@ One file is one memory. Append-only. No binaries, no lockfiles. Run `git init` i
 
 ## Configuration
 
-Two ways, same result — use either:
+**Settings → Memory Graph.** The plugin contributes its own page to the Settings sidebar, four groups: capture / privacy / extractor / retrieval. Every field carries a bilingual description and applies the moment you press Save — no restart, no reload.
 
-1. **The Settings UI**: Settings → Plugins → memory-graph. Every field carries a bilingual description and applies immediately.
-2. **Your profile's `cordis.patch.yml`**: better when the config belongs in version control or is built from variables.
+- A field you changed is badged as changed; the restore link next to it goes back to the default rather than blanking the value.
+- A rejected save says why (a number out of range, a host that was changed elsewhere in the meantime) instead of swallowing the edit.
+- The extractor group follows the route you pick: `harness` shows only the model knobs, `http` reveals the endpoint and key.
+
+**Four keys are not on that page**: the master switch `enabled`, the vault directory `vaultDir`, the default project tag `defaultProject`, and `crossProject`. The plugin consumes them once while activating (where the vault lives, which project to file under, whether to link cross-project entities), so changing one reloads the plugin, and they stay hand-written in your profile's `cordis.patch.yml`. The same row's `config` accepts the page's keys too — **the YAML is the final word**, and either place works:
 
 ```yaml
 - id: memory-graph
@@ -118,26 +125,43 @@ Two ways, same result — use either:
       hops: 1
 ```
 
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `vaultDir` | `~/dsh-memory` | where the vault lives, `~` supported |
-| `capture.enabled` | `true` | append raw events automatically |
-| `capture.includeToolOutput` | `false` | record tool call counts (never their contents) |
-| `capture.skipPatterns` | 3 built-in | fallback regexes for old logs that carry no provenance |
-| `privacy.useDefaultPatterns` | `true` | built-in key / private-key / token rules |
-| `privacy.denyPatterns` | `[]` | your own regexes, `(?i)` prefix supported |
-| `extractor.enabled` | `false` | when off, nothing is captured *and* no model is ever called |
-| `extractor.transport` | `harness` | `harness` = borrow the model from Settings; `http` = fill in your own endpoint |
-| `extractor.useCurrentModel` | `true` | harness mode: follow the model currently selected |
-| `extractor.provider` | `''` | harness mode: provider id, used when "follow" is off |
-| `extractor.reasoningEffort` | `''` | harness mode: thinking level, empty = whatever Settings has |
-| `extractor.baseUrl` | `https://api.deepseek.com/v1` | http mode: any OpenAI-compatible endpoint |
-| `extractor.path` | `/chat/completions` | http mode: the path |
-| `extractor.model` | `deepseek-chat` | http mode: the model id |
-| `extractor.apiKeyEnv` | `MEMORY_LLM_API_KEY` | http mode: the key is looked up under this name |
-| `extractor.temperature` | `0.1` | http mode only: in harness mode sampling belongs to the borrowed route |
-| `extractor.maxEpisodesPerRun` | `40` | how many episodes one distillation may feed in |
-| `retrieval.hops` | `1` | entity expansion depth, `0` = keyword only |
+| Key | Default | Meaning | On the page |
+| --- | --- | --- | --- |
+| `enabled` | `true` | master switch; off means the plugin is not loaded at all | — |
+| `vaultDir` | `~/dsh-memory` | where the vault lives, `~` supported | — |
+| `defaultProject` | `shared` | project tag for sessions with no usable cwd | — |
+| `crossProject` | `true` | link new cards into project-level entity hubs | — |
+| `capture.enabled` | `true` | append raw events automatically | ✓ |
+| `capture.userChars` | `1500` | how much of each of your messages is kept, truncated beyond | ✓ |
+| `capture.assistantChars` | `1500` | how much of each assistant reply is kept | ✓ |
+| `capture.includeToolOutput` | `false` | record tool names and call counts (**never their contents**) | ✓ |
+| `capture.minChars` | `12` | turns shorter than this are not stored ("ok", "continue") | ✓ |
+| `capture.skipPatterns` | 3 built-in | fallback regexes for old logs that carry no provenance | ✓ |
+| `privacy.useDefaultPatterns` | `true` | built-in key / private-key / token rules | ✓ |
+| `privacy.denyPatterns` | `[]` | your own regexes, `(?i)` prefix supported | ✓ |
+| `privacy.redactEmails` | `true` | addresses become `[email]` | ✓ |
+| `privacy.redactPaths` | `true` | the home directory becomes `~` | ✓ |
+| `extractor.enabled` | `false` | when off, capture still happens but no model is ever called | ✓ |
+| `extractor.transport` | `harness` | `harness` = borrow the model from Settings; `http` = fill in your own endpoint | ✓ |
+| `extractor.useCurrentModel` | `true` | harness mode: follow the model currently selected | ✓ |
+| `extractor.provider` | `''` | harness mode: provider id, used when "follow" is off | ✓ |
+| `extractor.reasoningEffort` | `''` | harness mode: thinking level, empty = whatever Settings has | ✓ |
+| `extractor.maxEpisodesPerRun` | `40` | how many episodes one distillation may feed in | ✓ |
+| `extractor.maxOutputTokens` | `3000` | output token cap per run | ✓ |
+| `extractor.timeoutMs` | `90000` | timeout of a single call | ✓ |
+| `extractor.baseUrl` | `https://api.deepseek.com/v1` | http mode: any OpenAI-compatible endpoint | ✓ (http) |
+| `extractor.path` | `/chat/completions` | http mode: the path | ✓ (http) |
+| `extractor.model` | `''` | model id; empty means `deepseek-chat` in http mode | ✓ (http) |
+| `extractor.apiKeyEnv` | `MEMORY_LLM_API_KEY` | http mode: the key is looked up under this name | ✓ (http) |
+| `extractor.apiKey` | `''` | http mode: the key inline (not recommended, see below) | ✓ (http) |
+| `extractor.temperature` | `0.1` | http mode only: in harness mode sampling belongs to the borrowed route | ✓ (http) |
+| `retrieval.limit` | `8` | how many cards one search returns | ✓ |
+| `retrieval.hops` | `1` | entity expansion depth, `0` = keyword only | ✓ |
+| `retrieval.snippetChars` | `320` | how much of each hit the model gets to read | ✓ |
+| `retrieval.timelineLimit` | `20` | how far back `memory_timeline` looks by default | ✓ |
+
+Why only those 28 are editable there: the harness projects **only fields declared `volatile`** — the ones read each time they are used. Everything marked ✓ is read at call time, so one save changes the next call. `enabled` / `vaultDir` / `defaultProject` / `crossProject` are consumed during activation and would need a remount, so they are left out rather than shown as knobs that do nothing; the page's footer says exactly that.
+
 
 ### Two ways to hook up the extractor
 
@@ -154,7 +178,7 @@ With `transport: 'harness'` the plugin touches no key and no endpoint: it asks t
 
 The extractor is fully independent: its own endpoint, model, and budget. Use it when extraction should run on a model configured elsewhere, behind your own gateway, or when this harness build exposes no `llm` service.
 
-The Settings form also has an `extractor.apiKey` field, but **do not use it**: whatever you type there is written in plaintext into the profile config. Pointing `apiKeyEnv` at a name and keeping the value in the environment or `~/.dsh/.credentials.yaml` is the intended route.
+The settings page also has an `extractor.apiKey` field (a password input that never echoes what you saved), but **do not use it**: whatever you type there is written in plaintext into the profile config. Pointing `apiKeyEnv` at a name and keeping the value in the environment or `~/.dsh/.credentials.yaml` is the intended route.
 
 ### Where the key comes from (http mode)
 
@@ -202,7 +226,7 @@ Dark:
 
 ![The memory graph in dark mode](docs/graph-dark.png)
 
-One honest limit: this is a **static file**, not a panel inside the DSH Web GUI. A panel would mean a client plugin (bundling, slot injection), which is not something zero dependencies buy you — so "you can look at it" came first.
+One honest limit: this is a **static file**, not a live panel inside the DSH Web GUI. The GUI does now have the settings page (`client.js`, a hand-written `__ModuleLoader__` factory, no build step and no JSX), but the graph itself did not move in — a panel means drawing the graph, subscribing to vault changes, zoom and hover, which is a different order of work. Configuration moved into the GUI first; looking stayed here.
 
 ## Cross-project means one person's projects, not shared memory
 
@@ -242,12 +266,13 @@ Side benefit: an injected message no longer cuts a turn in half, so an episode's
 No network, no real vault:
 
 ```bash
-npm test        # 38 + 9 + 11 + 21 + 48 = 127 checks, plus the 25-question retrieval eval
+npm test        # 38 + 13 + 17 + 11 + 21 + 48 = 148 checks, plus the 25-question retrieval eval
 npm run eval    # retrieval eval only (offline, deterministic)
 ```
 
 - `test/smoke.mjs` — storage, redaction, BM25 retrieval, entity expansion, supersede chain, extractor parsing
-- `test/schema.mjs` — the Settings schema must not drift from the runtime: every leaf of `Config({})` is compared with `resolveConfig({})` in both directions (`vaultDir` is the one exception — the form holds raw text, the runtime an absolute path), so a dead form field and an invisible setting both fail; plus the transport union, numeric bounds, the `secret` role on the inline key, and every setting appearing in the projected schema
+- `test/schema.mjs` — the Settings page must not drift from the runtime: every leaf of `Config({})` is compared with `resolveConfig({})` in both directions (`vaultDir` is the one exception — the page holds raw text, the runtime an absolute path), so a dead control and an invisible setting both fail; plus the transport union, numeric bounds, the `secret` role on the inline key, the 28 volatile leaves matching the page's field table exactly, and the four structural keys staying off it
+- `test/client.mjs` — mounts the page on a minimal React stand-in: the controls drawn equal the fields that should show, switching `transport` reveals the http knobs, an empty inline key is never sent as a deletion, an out-of-range number never reaches the wire, a refused save clears the drafts and explains itself, restore sends `unset` rather than `set`, the stylesheet is a single `<style>` tagged with the package name, and `client.js` contains no `export`/`import` (the loader evaluates it as a script)
 - `test/capture.mjs` — drives the capture listener with real `session/event` shapes, including injected context
 - `test/tools.mjs` — runs `execute` + `render` for all eight tools
 - `test/extract.mjs` — the extractor: `fetch` stubbed for the http route (prompt construction, key resolution order, tolerant JSON parsing, per-card project attribution, cursor advance, dry run writing nothing, secrets stopped before the write), then a fake `llm` service for the harness route (borrows the Settings model and thinking level, honours an explicit override, explains a missing selection, handles every terminal `finish`, reports cancellation, rejects an empty completion, and never touches `fetch`)
@@ -304,7 +329,8 @@ One deliberate asymmetry: **asking about the past gets its own path**. "Is the e
 - Harness mode borrows "whatever model is currently selected in Settings", so switching models mid-conversation also switches the extractor; turn `useCurrentModel` off to pin one. It spends that provider's quota — being a plugin does not make the calls free.
 - The graph view is a **static HTML file** (`graph.html`), not a panel inside the DSH Web GUI; a panel would be a separate client plugin.
 - Deduplication only matches "same project + same normalized title". Paraphrases become two cards.
-- The Settings form is the generic schemastery form: fields have bilingual descriptions, but there are **no section headings and no custom widgets**, and array-valued keys such as `skipPatterns` / `denyPatterns` are edited one line at a time. A nicer configuration UI would be a client-side panel of its own.
+- The page is four static section cards drawn from a hand-written field table, not a generic reflection of the schema; `test/schema.mjs` keeps the two in sync, but a schema change that skips that table will show up as a failing test rather than a new control. Array-valued keys (`skipPatterns`, `denyPatterns`) are still edited as one entry per line in a text area.
+- Anything changed outside the page is picked up on the next save round-trip: the page re-reads the served value and keeps your unsaved drafts, but it does not poll.
 - Capture granularity is one turn (flushed on `turn/end`), not one message; tool calls inside a turn are counted, not recorded. A long multi-step turn keeps the first six visible text blocks.
 - The vault writes its own `.gitignore` (ignoring `*.tmp`, OS junk and `.distill-state.json`); the last one is a per-machine distillation cursor, so a synced vault re-distills once on the other machine and relies on title dedup.
 

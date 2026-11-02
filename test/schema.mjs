@@ -1,8 +1,9 @@
 /**
  * Settings-form schema checks.
  *
- * The harness renders a plugin's Settings form straight from the `Config` schema
- * it exports, so the schema is part of the public surface. Two kinds of rot are
+ * The harness draws this plugin's page in 设置 (Settings) from the `Config`
+ * schema it exports: `@deepseek-ai/dsh-settings` keeps only the fields marked
+ * `.volatile()` and serves those as one editable form. Two kinds of rot are
  * possible and both are silent: a field added to `src/config.js` but not to the
  * form (invisible setting), and a default that disagrees between the form and
  * the runtime (the form shows one thing, the plugin does another).
@@ -10,11 +11,22 @@
  * The drift check below walks every leaf of the schema defaults and demands the
  * same value from `resolveConfig({})`, so adding a field in only one place fails
  * here instead of shipping.
+ *
+ * The last three checks are about the split that makes the page possible at all:
+ * a leaf is either volatile (live-editable in Settings) or structural (read once
+ * while activating, so editing it remounts the plugin). `client.js` declares the
+ * page's fields; the two descriptions must agree, or the page shows a knob the
+ * host refuses to write, or misses a knob the host serves.
  */
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import { Config } from '../src/schema.js'
-import { DEFAULT_SKIP_PATTERNS, resolveConfig } from '../src/config.js'
+import { DEFAULT_SKIP_PATTERNS, resolveConfig, unwrapConfig } from '../src/config.js'
+
+// client.js is a browser bundle; imported under Node it only publishes its
+// field table on globalThis (see the entry-point guard at the bottom of it).
+await import('../client.js')
+const spec = globalThis.__memoryGraphFormSpec
 
 let passed = 0
 const check = (name, fn) => {
@@ -38,11 +50,23 @@ const walk = (value, prefix = '') => {
   return leaves
 }
 
+/** Every leaf node of a schema with its dotted path and its node. */
+const schemaLeaves = (node, prefix = []) => {
+  if (!node) return []
+  if (node.type === 'object') {
+    return Object.entries(node.dict ?? {}).flatMap(([key, child]) => schemaLeaves(child, [...prefix, key]))
+  }
+  return [{ path: prefix.join('.'), node }]
+}
+
 const at = (object, dotted) => dotted.split('.').reduce((node, key) => node?.[key], object)
 
 console.log('schema')
 
-const defaults = Config({})
+// `Config({})` validates to frozen `{ get() }` refs for every live leaf, so all
+// value comparisons go through `unwrapConfig` — the same seam `src/config.js`
+// uses when the plugin reads its configuration.
+const defaults = unwrapConfig(Config({}))
 
 check('an empty config block is valid and yields the documented defaults', () => {
   assert.equal(defaults.enabled, true)
@@ -92,8 +116,8 @@ check('the runtime still fills what the form leaves blank', () => {
 })
 
 check('the transport union accepts exactly the two documented values', () => {
-  assert.equal(Config({ extractor: { transport: 'http' } }).extractor.transport, 'http')
-  assert.equal(Config({ extractor: { transport: 'harness' } }).extractor.transport, 'harness')
+  assert.equal(unwrapConfig(Config({ extractor: { transport: 'http' } })).extractor.transport, 'http')
+  assert.equal(unwrapConfig(Config({ extractor: { transport: 'harness' } })).extractor.transport, 'harness')
   assert.throws(() => Config({ extractor: { transport: 'openai' } }))
 })
 
@@ -102,8 +126,8 @@ check('numeric bounds reject what the runtime would silently clamp', () => {
   assert.throws(() => Config({ retrieval: { hops: 3 } }))
   // Values the runtime accepts must be accepted by the form too, or the form
   // cannot express a config the plugin supports.
-  assert.equal(Config({ extractor: { maxOutputTokens: 3000 } }).extractor.maxOutputTokens, 3000)
-  assert.equal(Config({ retrieval: { hops: 2 } }).retrieval.hops, 2)
+  assert.equal(unwrapConfig(Config({ extractor: { maxOutputTokens: 3000 } })).extractor.maxOutputTokens, 3000)
+  assert.equal(unwrapConfig(Config({ retrieval: { hops: 2 } })).retrieval.hops, 2)
 })
 
 check('the inline key is marked secret so the form can mask it', () => {
@@ -161,6 +185,63 @@ check('a distilling config round-trips from the form into the runtime', () => {
   assert.equal(runtime.extractor.enabled, true)
   assert.equal(runtime.extractor.transport, 'harness')
   assert.equal(runtime.extractor.reasoningEffort, 'high')
+})
+
+// ---------------------------------------------------------------------------
+// The volatile / structural split
+// ---------------------------------------------------------------------------
+
+const leaves = schemaLeaves(Config)
+const live = leaves.filter((leaf) => leaf.node.meta?.volatile === true)
+const structural = leaves.filter((leaf) => leaf.node.meta?.volatile !== true)
+
+check('the live knobs are volatile, which is the only thing 设置 can write', () => {
+  // `volatileForm()` in dsh-settings returns undefined unless some leaf is
+  // volatile, and an undefined form means the entry does not appear in 设置 at
+  // all — this is the check that would have caught the empty settings page.
+  assert.equal(live.length, 28, `expected 28 volatile leaves, found ${live.length}`)
+  assert.deepEqual(
+    live.map((leaf) => leaf.path).sort(),
+    [...spec.paths].sort(),
+    'the page and the schema must serve the same live fields',
+  )
+})
+
+check('the structural knobs stay ordinary so a change remounts the plugin', () => {
+  // They are consumed while activating (register tools, mkdir the vault, tag the
+  // session). A live write could not take effect, so they must not be volatile —
+  // and the page must say so instead of offering a switch that does nothing.
+  assert.deepEqual(structural.map((leaf) => leaf.path).sort(), ['crossProject', 'defaultProject', 'enabled', 'vaultDir'])
+  for (const knob of spec.structural) {
+    assert.ok(!spec.paths.includes(knob), `${knob} is structural and must not be on the Settings page`)
+  }
+})
+
+check('the page agrees with the schema about numbers', () => {
+  const byPath = new Map(leaves.map((leaf) => [leaf.path, leaf.node]))
+  for (const section of spec.sections) {
+    for (const field of section.fields) {
+      const node = byPath.get(field.path.join('.'))
+      assert.ok(node, `page field ${field.path.join('.')} is not in the schema`)
+      if (field.type !== 'number') continue
+      const bounds = node.meta ?? {}
+      assert.equal(field.min, bounds.min, `${field.path.join('.')}: page min disagrees with the schema`)
+      assert.equal(field.max, bounds.max, `${field.path.join('.')}: page max disagrees with the schema`)
+    }
+  }
+})
+
+check('every page field is rendered from something the form serves', () => {
+  const seen = new Set()
+  for (const section of spec.sections) {
+    for (const field of section.fields) {
+      const key = field.path.join('.')
+      assert.ok(!seen.has(key), `${key} is rendered twice`)
+      assert.ok(field.label, `${key} has no label`)
+      seen.add(key)
+    }
+  }
+  assert.equal(seen.size, spec.paths.length)
 })
 
 console.log(process.exitCode === 1 ? '\nSOME CHECKS FAILED' : `\nall ${passed} checks passed`)

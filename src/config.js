@@ -5,6 +5,11 @@
  * is a convenience, not the contract: every field is normalised here again, so a
  * config written by hand in `cordis.patch.yml`, or one carrying a stale key from
  * an older version, still resolves to a usable configuration.
+ *
+ * This is also the seam between the two config worlds. A field declared
+ * `.volatile()` arrives here as a live reference rather than a value; this module
+ * unwraps it, so everything downstream sees plain values, and re-resolving on
+ * `loader/volatile-update` turns a Settings write into a new snapshot.
  */
 import os from 'node:os'
 import path from 'node:path'
@@ -98,6 +103,39 @@ function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
+
+/** True for the frozen reference a `.volatile()` leaf validates to, not for a value. */
+function isVolatileRef(value) {
+  return value !== null && typeof value === 'object' && VOLATILE_WRITE in value
+}
+
+/**
+ * Replace every volatile reference with the value it holds right now.
+ *
+ * A field marked `.volatile()` in `src/schema.js` does not validate to its value:
+ * it validates to a frozen `{ get() }` handle, and the settings page writes
+ * through that handle. Everything below this function — the defaults merge, the
+ * normalisation, and the caller's `cfg` — deals in plain values, so the refs are
+ * unwrapped at the one place config enters the plugin. `resolveConfig` runs again
+ * on every `loader/volatile-update`, which is how a Settings write becomes a
+ * fresh snapshot.
+ *
+ * This is also what makes `{ ...DEFAULTS, ...config }` safe: a ref is a plain
+ * object whose only own key is `get`, so merging without unwrapping would keep
+ * the defaults and drop the user's value without any error.
+ */
+export function unwrapConfig(value) {
+  if (isVolatileRef(value)) return unwrapConfig(value.get())
+  if (Array.isArray(value)) return value.map(unwrapConfig)
+  if (isPlainObject(value)) {
+    const out = {}
+    for (const [key, child] of Object.entries(value)) out[key] = unwrapConfig(child)
+    return out
+  }
+  return value
+}
+
 function merge(base, override) {
   if (!isPlainObject(override)) return { ...base }
   const out = { ...base }
@@ -125,7 +163,7 @@ function int(value, fallback, min, max) {
 }
 
 export function resolveConfig(raw) {
-  const cfg = merge(DEFAULTS, raw)
+  const cfg = merge(DEFAULTS, unwrapConfig(raw ?? {}))
 
   const dir = expandHome(cfg.vaultDir)
   cfg.vaultDir = dir === '' ? path.join(os.homedir(), 'dsh-memory') : path.resolve(dir)
