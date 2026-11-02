@@ -18,6 +18,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { paths } from './config.js'
+import { renderGraphHtml } from './graph.js'
 
 const CARD_KEYS = [
   'id',
@@ -642,6 +643,7 @@ export function createVault(cfg, redactor) {
     lines.push('')
     lines.push(`- 卡片 cards: **${cards.length}** · 实体 entities: **${entities.length}** · 项目 projects: **${projects.length}**`)
     lines.push(`- 最后更新 last updated: ${nowIso()}`)
+    lines.push('- 想看图就打开同目录的 `graph.html` · open `graph.html` next to this file to see the graph')
     lines.push('')
     lines.push('## 分层 · Layers')
     lines.push('')
@@ -679,6 +681,26 @@ export function createVault(cfg, redactor) {
     }
 
     await writeAtomic(P.readme, `${lines.join('\n')}\n`)
+  }
+
+  /**
+   * Write the single-file graph view next to the README. Same inputs as the
+   * readme, plus the retracted cards — the graph shows them faded rather than
+   * dropping them, because "this was retracted" is itself a memory.
+   */
+  async function regenerateGraph() {
+    await ensure()
+    const cards = await listCards({ includeRetracted: true })
+    const entities = await listEntities()
+    const projects = await listProjects()
+    const html = renderGraphHtml({ cards, entities, projects, generatedAt: nowIso() })
+    await writeAtomic(P.graph, html)
+    return {
+      file: P.graph,
+      bytes: Buffer.byteLength(html),
+      cards: cards.length,
+      entities: entities.length,
+    }
   }
 
   /* ------------------------------------------------------------ stats */
@@ -734,6 +756,7 @@ export function createVault(cfg, redactor) {
     listProjects,
     touchProject,
     regenerateReadme,
+    regenerateGraph,
     stats,
   }
 }

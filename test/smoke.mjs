@@ -7,12 +7,14 @@ import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 
 import { resolveConfig } from '../src/config.js'
 import { createRedactor } from '../src/privacy.js'
 import { createVault } from '../src/vault.js'
 import { searchCards, timelineCards, tokenize } from '../src/search.js'
 import { buildPrompt, parseCards } from '../src/extract.js'
+import { renderGraphHtml } from '../src/graph.js'
 
 const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'memgraph-'))
 const cfg = resolveConfig({ vaultDir: dir, extractor: { enabled: true } })
@@ -268,6 +270,93 @@ const stillThere = await vault.getCard(privacy.id)
 check('purged card is gone', () => {
   assert.equal(stillThere, null)
 })
+
+/* ------------------------------------------------------------------ graph */
+const graphOut = await vault.regenerateGraph()
+const graphHtml = await fsp.readFile(graphOut.file, 'utf8')
+const graphCards = await vault.listCards({ includeRetracted: true })
+const graphEntities = await vault.listEntities()
+const graphProjects = await vault.listProjects()
+
+check('regenerateGraph writes graph.html', () => {
+  assert.equal(graphOut.file, path.join(dir, 'graph.html'))
+  assert.equal(graphOut.bytes, Buffer.byteLength(graphHtml, 'utf8'))
+  assert.equal(graphOut.cards, graphCards.length)
+  assert.equal(graphOut.entities, graphEntities.length)
+})
+check('graph.html is a self-contained page', () => {
+  assert.ok(graphHtml.length > 5000, `only ${graphHtml.length} bytes`)
+  assert.ok(graphHtml.startsWith('<!doctype html>'), graphHtml.slice(0, 40))
+  assert.ok(graphHtml.includes('<svg'), 'the canvas should be inline svg')
+  assert.ok(graphHtml.includes('记忆图'), 'the header should name the view')
+})
+check('graph carries every card and entity', () => {
+  for (const card of graphCards) assert.ok(graphHtml.includes(card.id), card.id)
+  for (const entity of graphEntities) assert.ok(graphHtml.includes(entity.slug), entity.slug)
+  for (const label of ['决策', '事实', '待解', '偏好', '记录', '实体']) {
+    assert.ok(graphHtml.includes(label), `the legend should name ${label}`)
+  }
+})
+check('graph loads nothing from the network', () => {
+  for (const bad of ['http://', 'https://', 'src=', '@import', 'url(http']) {
+    assert.equal(graphHtml.includes(bad), false, `graph.html must not contain ${bad}`)
+  }
+})
+
+const inlineScript = graphHtml.match(/<script>([\s\S]*?)<\/script>/)
+const inlineFile = path.join(dir, 'graph-inline.mjs')
+await fsp.writeFile(inlineFile, inlineScript ? inlineScript[1] : '', 'utf8')
+const inlineParse = spawnSync(process.execPath, ['--check', inlineFile], { encoding: 'utf8' })
+check('the inline script parses', () => {
+  assert.ok(inlineScript, 'graph.html should contain one inline script')
+  assert.equal(inlineParse.status, 0, inlineParse.stderr)
+})
+
+const htmlA = renderGraphHtml({
+  cards: graphCards,
+  entities: graphEntities,
+  projects: graphProjects,
+  generatedAt: '2026-11-02T00:00:00+08:00',
+})
+const htmlB = renderGraphHtml({
+  cards: graphCards,
+  entities: graphEntities,
+  projects: graphProjects,
+  generatedAt: '2026-11-03T09:30:00+08:00',
+})
+check('two renders differ only in the timestamp', () => {
+  assert.equal(
+    htmlA.replace('2026-11-02T00:00:00+08:00', 'T'),
+    htmlB.replace('2026-11-03T09:30:00+08:00', 'T'),
+  )
+})
+
+const emptyDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'memgraph-empty-'))
+const emptyCfg = resolveConfig({ vaultDir: emptyDir })
+const emptyVault = createVault(emptyCfg, createRedactor(emptyCfg.privacy))
+const emptyOut = await emptyVault.regenerateGraph()
+const emptyHtml = await fsp.readFile(emptyOut.file, 'utf8')
+check('an empty vault renders a readable page, not a blank one', () => {
+  assert.equal(emptyOut.cards, 0)
+  assert.ok(emptyHtml.includes('记忆库还是空的'), 'the empty state should explain itself')
+  assert.ok(emptyHtml.length > 4000, `only ${emptyHtml.length} bytes`)
+})
+await emptyVault.saveCard({
+  kind: 'fact',
+  title: '只有一张卡片',
+  body: '一张卡片也能画成一张图。',
+  entities: ['孤岛'],
+  confidence: 'verified',
+})
+const singleOut = await emptyVault.regenerateGraph()
+const singleHtml = await fsp.readFile(singleOut.file, 'utf8')
+check('a one-card vault renders its single neuron', () => {
+  assert.equal(singleOut.cards, 1)
+  assert.equal(singleOut.entities, 1)
+  assert.ok(singleHtml.includes('只有一张卡片'))
+  assert.ok(singleHtml.includes('孤岛'))
+})
+await fsp.rm(emptyDir, { recursive: true, force: true })
 
 console.log(results.join('\n'))
 console.log(`\nvault: ${dir}`)

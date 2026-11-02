@@ -52,6 +52,22 @@ function formatHits(hits) {
 export function registerTools(ctx, { cfg, vault, redactor }) {
   const disposers = []
 
+  /**
+   * README and graph.html are derived views: rendered from the cards, never the
+   * source of truth. A view that fails to render must not fail the write that
+   * triggered it — the card is already on disk and the next write rebuilds it.
+   */
+  async function refreshViews() {
+    for (const render of [vault.regenerateReadme, vault.regenerateGraph]) {
+      if (typeof render !== 'function') continue
+      try {
+        await render.call(vault)
+      } catch (error) {
+        ctx.logger?.warn?.(`[memory-graph] could not render a vault view: ${error?.message ?? error}`)
+      }
+    }
+  }
+
   /* ---------------------------------------------------------------- search */
   disposers.push(
     ctx.tools.register({
@@ -353,7 +369,7 @@ export function registerTools(ctx, { cfg, vault, redactor }) {
           project,
           source: { kind: 'agent', project },
         })
-        await vault.regenerateReadme()
+        await refreshViews()
         const redactions = title.hits.length + body.hits.length
         return {
           ok: true,
@@ -393,11 +409,11 @@ export function registerTools(ctx, { cfg, vault, redactor }) {
         const mode = args.mode === 'purge' ? 'purge' : 'retract'
         if (mode === 'purge') {
           const done = await vault.purgeCard(String(args.id))
-          await vault.regenerateReadme()
+          await refreshViews()
           return { ok: done, text: done ? `Purged ${args.id}.` : `No card with id ${args.id}.` }
         }
         const card = await vault.retractCard(String(args.id), args.reason)
-        await vault.regenerateReadme()
+        await refreshViews()
         return {
           ok: Boolean(card),
           text: card ? `Retracted ${card.id} "${card.title}". The card and its history stay readable.` : `No card with id ${args.id}.`,
@@ -441,6 +457,9 @@ export function registerTools(ctx, { cfg, vault, redactor }) {
           if (report.skipped) lines.push(`  skipped: ${report.skipped}`)
           if (report.usage) lines.push(`  tokens: ${JSON.stringify(report.usage)}`)
         }
+        // Distillation is the biggest writer of all: without this the graph and
+        // the README would only catch up on the next remember/forget.
+        if (report.ok && !report.dryRun && report.episodes > 0) await refreshViews()
         return { ...report, text: lines.join('\n') }
       },
     }),
@@ -465,6 +484,7 @@ export function registerTools(ctx, { cfg, vault, redactor }) {
           `episodes: ${stats.episodes.records} records in ${stats.episodes.files} file(s)`,
           `last distill: ${stats.distill.lastRun ?? 'never'}`,
           `privacy rules: ${stats.privacy.rules}`,
+          `views: README.md and graph.html in the vault root (open the HTML directly, no server needed)`,
         ].join('\n')
         return { ...stats, text }
       },

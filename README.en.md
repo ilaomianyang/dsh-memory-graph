@@ -75,6 +75,7 @@ Uninstall with `plugin_manager action=remove_bundle target="@local/dsh-memory-gr
 ├── vault.json                   schema version, creation time
 ├── projects.json                project slugs seen so far
 ├── README.md                    generated index linking every card
+├── graph.html                   generated memory graph, open it in a browser
 ├── episodes/2026-11-02.jsonl    raw layer: one line per turn, append-only
 ├── cards/2026-11/               semantic layer: one file per card
 │   └── c-20261102-7f3a.md
@@ -123,10 +124,23 @@ Override the row in your profile's `cordis.patch.yml`:
 | `privacy.useDefaultPatterns` | `true` | built-in key / private-key / token rules |
 | `privacy.denyPatterns` | `[]` | your own regexes, `(?i)` prefix supported |
 | `extractor.enabled` | `false` | when off, nothing is captured *and* no model is ever called |
-| `extractor.apiKeyEnv` | `MEMORY_LLM_API_KEY` | the key comes from the environment |
+| `extractor.baseUrl` | `https://api.deepseek.com/v1` | any OpenAI-compatible endpoint (own gateway, another vendor) |
+| `extractor.model` | `deepseek-chat` | the model used for distillation |
+| `extractor.apiKeyEnv` | `MEMORY_LLM_API_KEY` | the key is looked up under this name |
+| `extractor.maxEpisodesPerRun` | `40` | how many episodes one distillation may feed in |
 | `retrieval.hops` | `1` | entity expansion depth, `0` = keyword only |
 
 The extractor is **separate from your chat model**: its own endpoint, its own model, its own budget.
+
+### Where the key comes from
+
+Tried in this order; whichever answers is used, and the value is never logged, never audited, never written into the vault:
+
+1. `extractor.apiKey` in the config (not recommended — it ends up in YAML)
+2. the process environment variable named by `extractor.apiKeyEnv`
+3. **the harness's own credential store**: `refs.<apiKeyEnv>` in `~/.dsh/.credentials.yaml`
+
+Point 3 means that if the key is already configured for the harness (`DEEPSEEK_API_KEY`, say), you just set `apiKeyEnv` to the same name instead of exporting anything. Reading the store parses the `refs:` block only and touches nothing else. `memory_distill` reports *which* source it used, never the value.
 
 ## Tools
 
@@ -144,6 +158,27 @@ The extractor is **separate from your chat model**: its own endpoint, its own mo
 `memory_graph` is the "neuron" part made concrete: an edge is not invented, it is **two cards mentioning the same entity**. It claims co-mention, never causation — the model decides what that means.
 
 **Nothing is injected automatically.** Memory only enters the context when the model asks for it. Most turns do not need long-term memory, and injecting it would be pure cost.
+
+## Look at your memory
+
+`memory_stats` tells you where the vault is; in its root there is also **`graph.html`** — double-click it, nothing to install, no server:
+
+![The memory graph: entities are hubs, cards are neurons](docs/graph-light.png)
+
+- **Entities are the large dark hubs** (`infra`, `deepseek`, `blog-engine`, `memory-graph`…), sized by how often they are mentioned — the cross-project ones stand out immediately.
+- **Cards are the small coloured dots**, coloured by kind: decision / fact / open question / preference / note.
+- **Dashed edges are replaced memories** (`superseded`), so you can see where the record changed its mind; retracted cards stay visible, greyed out.
+- Search by title / entity / id, filter by project, click a card for its detail, hover to highlight one-hop neighbours, scroll to zoom, drag the background to pan, `Esc` to clear.
+- Follows the system light/dark setting; you can also open `#dark`, `#light`, or `#dark&<card id|entity slug>` to pin the theme and jump to one card.
+- Redrawn after every `memory_remember` / `memory_forget` / `memory_distill`. An empty vault and a one-card vault both render something readable instead of a blank page.
+
+It is **one self-contained HTML file**: no CDN, no framework, no build step, no network requests — the data is inlined at render time. 38 cards → 101 KB. Delete it if you like; the next write regenerates it.
+
+Dark:
+
+![The memory graph in dark mode](docs/graph-dark.png)
+
+One honest limit: this is a **static file**, not a panel inside the DSH Web GUI. A panel would mean a client plugin (bundling, slot injection), which is not something zero dependencies buy you — so "you can look at it" came first.
 
 ## Cross-project means one person's projects, not shared memory
 
@@ -183,18 +218,65 @@ Side benefit: an injected message no longer cuts a turn in half, so an episode's
 No network, no real vault:
 
 ```bash
-npm test     # 62 checks across three suites
+npm test        # 30 + 11 + 21 + 34 = 96 checks, plus the 25-question retrieval eval
+npm run eval    # retrieval eval only (offline, deterministic)
 ```
 
 - `test/smoke.mjs` — storage, redaction, BM25 retrieval, entity expansion, supersede chain, extractor parsing
 - `test/capture.mjs` — drives the capture listener with real `session/event` shapes, including injected context
 - `test/tools.mjs` — runs `execute` + `render` for all eight tools
+- `test/extract.mjs` — the extractor with `fetch` stubbed: prompt construction, key resolution order, tolerant JSON parsing, per-card project attribution, cursor advance, dry run writing nothing, secrets stopped before the write
+
+Two suites do touch the network (and cost money), so they are not in `npm test`:
+
+```bash
+npm run live             # real model, end to end: 3 episodes → distill → search them back
+npm run live:supersede   # real model: record a decision, then correct it, check the supersede chain
+```
+
+They read the key from `~/.dsh/.credentials.yaml` or the environment (see above); nothing is hard-coded or persisted.
+
+## Distillation, measured (real runs, not estimates)
+
+With `deepseek-chat` via `npm run live`:
+
+| Input | Output | Time | Tokens |
+| --- | --- | --- | --- |
+| 3 synthetic episodes (mixed zh/en, 2 projects) | 5 cards, project attribution 5/5 correct | 2.9 s / 3.6 s (two runs) | ≈1,590 |
+| a real 266-event session log → 2 captured episodes (1,501 + 278 chars) | 9 cards (8 decision + 1 preference), Chinese in, Chinese out | 5.9 s | 2,816 (prompt 1,795 / completion 1,021) |
+
+`npm run live:supersede` checks that temporal validity actually moves: round one records "share it on GitHub", round two the user corrects "the *plugin* is shared, not the memories"; the extractor fills `supersedes` itself, the old card flips to `superseded` with a `valid_to`, and the two link to each other. Offline tests can prove the mechanism, not that a model will use it.
+
+One honest lesson from doing this: replaying an **older snapshot** produced a card stating "memories are meant to be shared on GitHub" as the current truth. The model was not at fault — the snapshot predated the correction. **A memory is only as good as what it read.** So episodes are kept forever, cards can be overturned (`supersedes`), and the overturning stays visible (`memory_timeline`).
+
+## How good is retrieval, really?
+
+`eval/` is an offline benchmark: 38 cards / 3 projects / 5 kinds / 7 cross-project entities / 4 supersede chains / 1 retracted card, 25 retrieval questions (9 keyword, 6 entity-bridge, 5 temporal, 5 negative) plus 4 paired "ask about the past vs ask about now" questions. It runs the real `searchCards` from this repo rather than a second scoring implementation. The questions were written before any number was seen and not edited afterwards.
+
+```bash
+npm run eval
+```
+
+Current result (limit 5, hops 1):
+
+| Type | n | recall@1 | recall@5 | MRR |
+| --- | --- | --- | --- | --- |
+| keyword | 9 | 1.00 | 1.00 | 1.00 |
+| entity-bridge | 6 | 0.67 | 0.94 | 0.83 |
+| temporal | 5 | 0.60 | 1.00 | 0.80 |
+| history pairs (retired vs successor) | 4 | — | — | 4/4 |
+| negative (not in the vault) | 5 | — | — | 0/5 false positives |
+| all | 25 | 0.80 | **0.98** | 0.90 |
+
+**[`eval/REPORT.md`](eval/REPORT.md) records what this benchmark does not cover** and lists eight known weaknesses — including that history-vs-current intent is detected by one regex (also an enumeration; it still misses some phrasings), that "is that old Kuma setup still around?" is a present-tense question the reader may treat as history, and that ordinary topic words like "deployment" keep the false-positive line fuzzy. Read that report before trusting the number: 0/5 means "these five passed", not "negatives are solved", and 4 pairs is coin-flip-grade evidence.
+
+One deliberate asymmetry: **asking about the past gets its own path**. "Is the extractor on by default now?" demotes the retired card and promotes the current answer; "what was the first version of the extraction design?" restores the retired card to full weight. Same words, different tense, different right answer — demotion must not mean unreachable.
 
 ## Known limits
 
 - Retrieval is BM25 plus entity expansion — **no vector recall**. Chinese uses bigram tokenization, which works but trails embeddings; swap it out once you pass a few thousand cards.
 - Distillation quality depends on the extractor model and **only happens when you call it**. Pair it with a scheduled task.
-- No graph view in the Web UI yet; the generated `README.md` and the filesystem are the current browser.
+- The graph view is a **static HTML file** (`graph.html`), not a panel inside the DSH Web GUI; a panel would be a separate client plugin.
 - Deduplication only matches "same project + same normalized title". Paraphrases become two cards.
 - No `Config` schema is exported, so there is no Settings form; configure via `cordis.patch.yml`. That keeps the plugin truly dependency-free at the cost of writing YAML.
 - Capture granularity is one turn (flushed on `turn/end`), not one message; tool calls inside a turn are counted, not recorded. A long multi-step turn keeps the first six visible text blocks.

@@ -156,6 +156,7 @@ export function paths(vaultDir) {
     gitignore: path.join(vaultDir, '.gitignore'),
     vaultJson: path.join(vaultDir, 'vault.json'),
     readme: path.join(vaultDir, 'README.md'),
+    graph: path.join(vaultDir, 'graph.html'),
     projects: path.join(vaultDir, 'projects.json'),
     episodes: path.join(vaultDir, 'episodes'),
     cards: path.join(vaultDir, 'cards'),

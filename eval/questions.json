@@ -1,0 +1,277 @@
+{
+  "version": 1,
+  "about": "25 questions a real owner of this vault would ask, in the phrasing they would actually use, plus 8 paired history/current questions scored as their own group. Annotations were written before any score was taken.",
+  "vault": "built by eval/seed.mjs: 38 cards, 3 projects (memory-graph / blog-engine / infra), 5 kinds, 7 cross-project entity bridges, 4 supersede chains, 1 retracted card",
+  "retrieval": { "limit": 5, "hops": 1 },
+  "legend": {
+    "keyword": "答案就写在某张卡的标题或正文里，靠词面匹配就该找到",
+    "entity-bridge": "答案在另一个项目里，只有共享实体（零依赖 / sqlite / deepseek / github-actions / esm / 写作偏好）把它们连起来，期望命中多张卡",
+    "temporal": "问的是「现在」，旧卡被 supersede 链压过；expect 是当前有效的卡，demote 是必须排在其后的旧卡。mode=history 的题反过来问旧卡，考的是它没被藏起来",
+    "history": "成对出现：pair 相同、side=history 的一侧期望老的（被 supersede 的）卡，side=current 的一侧期望新的卡。两侧都要期望卡在前五，且对侧那张卡不得排在它前面——只答对一边不算过。单独出分，单独门槛，不进原 25 条的判定",
+    "negative": "库里根本没有这个话题，正确行为是低分或空，返回高分即误报"
+  },
+  "questions": [
+    {
+      "id": "k1",
+      "kind": "keyword",
+      "query": "为什么记忆不用 sqlite 存",
+      "expect": ["c-20260305-0001"],
+      "note": "最常被问的一句，答案就是那条决策卡"
+    },
+    {
+      "id": "k2",
+      "kind": "keyword",
+      "query": "tokenize 中文是怎么切的",
+      "expect": ["c-20260618-0004"],
+      "note": "中英混写，技术词用英文原样打"
+    },
+    {
+      "id": "k3",
+      "kind": "keyword",
+      "query": "vault 目录结构是怎样的",
+      "expect": ["c-20260901-0009"],
+      "note": "想知道磁盘上都有什么；注意 vault 这个词在很多卡的实体里"
+    },
+    {
+      "id": "k4",
+      "kind": "keyword",
+      "query": "评论系统现在用什么",
+      "expect": ["c-20260512-0016"],
+      "project": "blog-engine",
+      "note": "带项目过滤问，用户知道这是博客的事"
+    },
+    {
+      "id": "k5",
+      "kind": "keyword",
+      "query": "restic backup B2 多久跑一次",
+      "expect": ["c-20260320-0025"],
+      "note": "全英文关键词，运维的人就这么打"
+    },
+    {
+      "id": "k6",
+      "kind": "keyword",
+      "query": "Hetzner 那台机器什么配置",
+      "expect": ["c-20260425-0026"],
+      "note": "先想起牌子再想起配置"
+    },
+    {
+      "id": "k7",
+      "kind": "keyword",
+      "query": "封面图怎么处理的",
+      "expect": ["c-20260905-0020"],
+      "note": "口语化，没有出现 Cloudflare"
+    },
+    {
+      "id": "k8",
+      "kind": "keyword",
+      "query": "RSS 输出全文还是摘要",
+      "expect": ["c-20261024-0023"],
+      "note": "英文字母缩写 + 中文，看缩写能不能命中"
+    },
+    {
+      "id": "k9",
+      "kind": "keyword",
+      "query": "日志保留多久",
+      "expect": ["c-20261030-0034"],
+      "note": "六个字，信息量最低的问法"
+    },
+    {
+      "id": "e1",
+      "kind": "entity-bridge",
+      "query": "我是不是定过所有项目都要零依赖",
+      "expect": ["c-20260520-0003", "c-20260310-0014", "c-20260809-0029"],
+      "note": "一个实体横跨三个项目，三张卡都该出来"
+    },
+    {
+      "id": "e2",
+      "kind": "entity-bridge",
+      "query": "sqlite 我到底在哪些地方用过",
+      "expect": ["c-20260305-0001", "c-20260512-0016"],
+      "note": "记忆库和博客评论都用了 sqlite，跨两个项目"
+    },
+    {
+      "id": "e3",
+      "kind": "entity-bridge",
+      "query": "deepseek 的钱我都花在哪了",
+      "expect": ["c-20260802-0007", "c-20261002-0031"],
+      "note": "抽取器扣费和 infra 账单告警是两张卡，同一个实体"
+    },
+    {
+      "id": "e4",
+      "kind": "entity-bridge",
+      "query": "github actions 上都跑了些什么任务",
+      "expect": ["c-20260708-0018", "c-20261016-0032"],
+      "note": "博客部署和夜间备份，两个项目共用一套 Actions"
+    },
+    {
+      "id": "e5",
+      "kind": "entity-bridge",
+      "query": "写作偏好这条最早是在哪里记下来的",
+      "expect": ["c-20261029-0013"],
+      "note": "最新的是博客那两条，但最早那条在记忆库项目里，考的是别被新卡盖住"
+    },
+    {
+      "id": "e6",
+      "kind": "entity-bridge",
+      "query": "esm 这个选择在几个项目里一致吗",
+      "expect": ["c-20260310-0014", "c-20261101-0024", "c-20260912-0030"],
+      "note": "三个项目都提过 esm/ESM；记忆库自己那条(0003)人所共知，不计入期望"
+    },
+    {
+      "id": "t1",
+      "kind": "temporal",
+      "query": "抽取模型现在默认开着吗",
+      "expect": ["c-20260802-0007"],
+      "demote": ["c-20260715-0006"],
+      "note": "旧卡说默认关闭，新卡改成显式调用，问的是哪条还算数"
+    },
+    {
+      "id": "t2",
+      "kind": "temporal",
+      "query": "监控现在到底是什么方案",
+      "expect": ["c-20260706-0028"],
+      "demote": ["c-20260530-0027"],
+      "note": "两代方案，问现在"
+    },
+    {
+      "id": "t3",
+      "kind": "temporal",
+      "query": "Zabbix 那套还在用吗",
+      "expect": ["c-20260706-0028"],
+      "demote": ["c-20260530-0027"],
+      "note": "用旧方案的名字提问，新卡标题和正文里都没有 Zabbix 这个词"
+    },
+    {
+      "id": "t4",
+      "kind": "temporal",
+      "mode": "history",
+      "query": "最早那版抽取方案是什么",
+      "expect": ["c-20260715-0006"],
+      "note": "反过来问历史：被 superseded 的卡仍然应该查得到，不能被藏起来"
+    },
+    {
+      "id": "t5",
+      "kind": "temporal",
+      "query": "最近关于监控和日志的决定",
+      "expect": ["c-20260706-0028", "c-20261030-0034"],
+      "demote": ["c-20260530-0027"],
+      "kinds": ["decision"],
+      "note": "带 kinds 过滤问最近决定，跨两个话题"
+    },
+    {
+      "id": "h1h",
+      "kind": "history",
+      "pair": "h1",
+      "side": "history",
+      "query": "抽取最早是不是默认开着的",
+      "expect": ["c-20260715-0006"],
+      "rival": ["c-20260802-0007"],
+      "note": "问过去那一版；对侧 h1c 问现状。答对一边不算过"
+    },
+    {
+      "id": "h1c",
+      "kind": "history",
+      "pair": "h1",
+      "side": "current",
+      "query": "抽取现在是显式调用才跑吗",
+      "expect": ["c-20260802-0007"],
+      "rival": ["c-20260715-0006"],
+      "note": "问现状；旧卡不能因为措辞接近就排上来"
+    },
+    {
+      "id": "h2h",
+      "kind": "history",
+      "pair": "h2",
+      "side": "history",
+      "query": "监控当初用 Zabbix 的时候是怎么弄的",
+      "expect": ["c-20260530-0027"],
+      "rival": ["c-20260706-0028"],
+      "note": "用旧方案的名字问旧方案；这是 t3 反面，t3 问的是它还在不在用"
+    },
+    {
+      "id": "h2c",
+      "kind": "history",
+      "pair": "h2",
+      "side": "current",
+      "query": "监控现在是用 Prometheus 还是 Kuma",
+      "expect": ["c-20260706-0028"],
+      "rival": ["c-20260530-0027"],
+      "note": "两个候选都点名，考的是哪一代算数"
+    },
+    {
+      "id": "h3h",
+      "kind": "history",
+      "pair": "h3",
+      "side": "history",
+      "query": "告警最早是发邮件的吗",
+      "expect": ["c-20260110-0036"],
+      "rival": ["c-20261102-0035"],
+      "note": "邮件 vs 邮箱 是两个 token，看旧卡能不能靠它自己的措辞被捞出来"
+    },
+    {
+      "id": "h3c",
+      "kind": "history",
+      "pair": "h3",
+      "side": "current",
+      "query": "告警现在只发手机吗",
+      "expect": ["c-20261102-0035"],
+      "rival": ["c-20260110-0036"],
+      "note": "问现状"
+    },
+    {
+      "id": "h4h",
+      "kind": "history",
+      "pair": "h4",
+      "side": "history",
+      "query": "证书当初是手动 renew 的吗",
+      "expect": ["c-20260105-0037"],
+      "rival": ["c-20260128-0038"],
+      "note": "旧卡独占 renew 这个词，新卡只提过手动"
+    },
+    {
+      "id": "h4c",
+      "kind": "history",
+      "pair": "h4",
+      "side": "current",
+      "query": "证书现在自动续期吗",
+      "expect": ["c-20260128-0038"],
+      "rival": ["c-20260105-0037"],
+      "note": "问现状"
+    },
+    {
+      "id": "n1",
+      "kind": "negative",
+      "query": "WASM 沙箱的 benchmark 跑出来多少",
+      "expect": [],
+      "note": "库里没有 rust/wasm。但跑出来、多少这类高频二元组可能撞上不相干的卡"
+    },
+    {
+      "id": "n2",
+      "kind": "negative",
+      "query": "Rust borrow checker 的 lifetime 标注怎么写",
+      "expect": [],
+      "note": "整句都是另一个技术栈的词"
+    },
+    {
+      "id": "n3",
+      "kind": "negative",
+      "query": "我妈生日是哪天",
+      "expect": [],
+      "note": "生活类问题，库里一条都没有"
+    },
+    {
+      "id": "n4",
+      "kind": "negative",
+      "query": "GraphQL schema 的 codegen 流程是什么",
+      "expect": [],
+      "note": "英文技术名词，没记过"
+    },
+    {
+      "id": "n5",
+      "kind": "negative",
+      "query": "iOS 的 TestFlight 审核过了吗",
+      "expect": [],
+      "note": "另一个完全没碰过的平台"
+    }
+  ]
+}

@@ -73,6 +73,7 @@ plugin_manager action=install_bundle target="<本仓库绝对路径>"
 ├── vault.json                     库的元信息（schema 版本、创建时间）
 ├── projects.json                  见到过的项目 slug
 ├── README.md                      自动生成的目录页，链接到每张卡片
+├── graph.html                     自动生成的记忆图，双击打开
 ├── episodes/2026-11-02.jsonl      原始层：一轮一行，只追加
 ├── cards/2026-11/                语义层：一个文件一张卡片
 │   └── c-20261102-7f3a.md
@@ -119,10 +120,23 @@ plugin_manager action=install_bundle target="<本仓库绝对路径>"
 | `privacy.useDefaultPatterns` | `true` | 内置密钥/私钥/token 规则 |
 | `privacy.denyPatterns` | `[]` | 追加你自己的正则，支持 `(?i)` 前缀 |
 | `extractor.enabled` | `false` | 关闭时只采集不蒸馏，不产生任何模型调用 |
-| `extractor.apiKeyEnv` | `MEMORY_LLM_API_KEY` | API key 从环境变量读 |
+| `extractor.baseUrl` | `https://api.deepseek.com/v1` | 任何 OpenAI 兼容端点都行（自建网关、其他厂商） |
+| `extractor.model` | `deepseek-chat` | 抽取用的模型 |
+| `extractor.apiKeyEnv` | `MEMORY_LLM_API_KEY` | key 从这个环境变量名的来源里找 |
+| `extractor.maxEpisodesPerRun` | `40` | 一次蒸馏最多喂多少条情节 |
 | `retrieval.hops` | `1` | 联想扩散跳数，0 = 只做关键词 |
 
 **抽取器是独立的**，用自己的 endpoint 和模型，不占用对话模型的额度。
+
+### key 从哪来
+
+按这个顺序找，找到就用，一路都不写进日志、不写进审计、不写进记忆库：
+
+1. 配置里的 `extractor.apiKey`（不推荐，会落到 YAML 里）
+2. 进程环境变量 `extractor.apiKeyEnv` 指定的那个名字
+3. **Harness 自己的凭据库** `~/.dsh/.credentials.yaml` 里 `refs.<apiKeyEnv>` 指向的条目
+
+第 3 条的意思是：如果你已经把 key 配给 Harness 用（比如 `DEEPSEEK_API_KEY`），把 `apiKeyEnv` 改成同名就行，不用再导出环境变量。读凭据库时只解析 `refs:` 那一段，别的内容不碰。`memory_stats` 会告诉你这次蒸馏用的是哪一路（`source` 字段），但永远只报来源、不报值。
 
 ## 工具
 
@@ -140,6 +154,27 @@ plugin_manager action=install_bundle target="<本仓库绝对路径>"
 `memory_graph` 是"神经元"那部分的具体形态：边不是凭空生成的，而是**两张卡片提到同一个实体**。它不声称因果，只声称"这两个东西在同一段记忆里出现过"，模型看到之后自己判断。
 
 **没有自动注入。** 记忆只在模型主动调用工具时才进入上下文——这是刻意的：大多数轮次根本不需要长期记忆，注入了就是纯成本。
+
+## 看一眼你的记忆
+
+`memory_stats` 会告诉你库在哪；库里根目录还有一个 **`graph.html`**，双击就能开，不用装东西、不用起服务：
+
+![记忆图：实体是枢纽，卡片是神经元](docs/graph-light.png)
+
+- **实体是深色大枢纽**（`infra`、`deepseek`、`blog-engine`、`memory-graph`……），大小按被提及次数长，跨项目共享的实体一眼就能认出来。
+- **卡片是彩色小点**，颜色是 kind：决策 / 事实 / 待解 / 偏好 / 记录。
+- **虚线 = 已被替换**（`superseded`），能看见「改口」发生过的位置；撤回的卡片仍在，只是灰掉。
+- 搜标题 / 实体 / id、按项目过滤、点卡片看详情、悬停高亮一跳邻居、滚轮缩放、拖背景平移、`Esc` 清除。
+- 跟随系统深浅色；也可以直接跳到 `#dark`、`#light`，或者 `#dark&<卡片id|实体slug>` 一次把主题和某张卡片都定好。
+- 每次 `memory_remember` / `memory_forget` / `memory_distill` 之后自动重画；空库和只有一张卡的库都有能读的提示，不会白屏。
+
+它是**一个自包含的 HTML 文件**：没有 CDN、没有框架、没有构建步骤、没有网络请求，数据是渲染时内联进去的。38 张卡片 → 101 KB。丢掉它也无所谓，下次写入会重新生成。
+
+深色：
+
+![记忆图深色模式](docs/graph-dark.png)
+
+一个明确的边界：这是一个**静态文件**，不是 DSH Web GUI 里的面板。做面板要写 client 插件（打包、注入 slot），那不是零依赖能换来的东西，所以先把「能看」做出来。
 
 ## 跨项目是什么意思
 
@@ -179,18 +214,65 @@ Harness 会把运行时快照、技能目录、时间戳、审批通知、压缩
 零依赖，不联网，不碰真实记忆库：
 
 ```bash
-npm test     # 30 + 11 + 21 = 62 项检查
+npm test        # 30 + 11 + 21 + 34 = 96 项检查，另加 25 题检索评测
+npm run eval    # 只跑检索评测（离线，确定性的）
 ```
 
 - `test/smoke.mjs` — 存储、隐私过滤、BM25 检索、实体扩散、supersede 链、蒸馏结果解析
 - `test/capture.mjs` — 用真实的 `session/event` 形状驱动采集，验证一轮一情节、密钥被拦、短轮不入库、注入消息不入库
 - `test/tools.mjs` — 逐个跑 8 个工具的 `execute` + `render`
+- `test/extract.mjs` — 抽取器：`fetch` 打桩，验证提示词构造、key 解析顺序、JSON 解析容错、每张卡片归到自己的项目、游标前进、dry run 不落盘、密钥在写入前被拦住
+
+下面两个测试会真的联网/花钱，所以不在 `npm test` 里，要自己跑：
+
+```bash
+npm run live             # 真模型端到端：3 条情节 → 蒸馏 → 再检索回来
+npm run live:supersede   # 真模型：先记一条，再让它被"更正"推翻，验证作废链
+```
+
+它们从 `~/.dsh/.credentials.yaml` 或环境变量取 key（见下文），不写死、不落盘。
+
+## 蒸馏实测（真模型跑过，不是估计）
+
+用 `deepseek-chat`，`npm run live`：
+
+| 输入 | 产出 | 耗时 | token |
+| --- | --- | --- | --- |
+| 3 条合成情节（中英混排，2 个项目） | 5 张卡片，项目归属 5/5 正确 | 2.9 s / 3.6 s（两次） | ≈1 590 |
+| 真实会话日志 266 个事件 → 采出 2 条情节（1 501 + 278 字） | 9 张卡片（8 decision + 1 preference），中文进中文出 | 5.9 s | 2 816（prompt 1 795 / completion 1 021） |
+
+`npm run live:supersede` 验证的是**时间有效性真的会动**：第一轮记下「上传到 GitHub 共享」，第二轮用户更正「共享的是插件，不是记忆」，抽取模型自己填 `supersedes`，旧卡转 `superseded` 并写 `valid_to`，两边链接互指。这条链在离线测试里只能验证机制，验证不了模型会不会填。
+
+顺带一个真实的教训：我第一次拿**旧快照**回放时，蒸馏出的卡片把"记忆要上传 GitHub 共享"当成了现行结论。查下来的原因不是模型错，是那份快照早于用户的更正——**记忆只能和它读到的东西一样好**。所以插件做的是：情节永远留着，卡片可被推翻（`supersedes`），推翻也可被查（`memory_timeline`）。
+
+## 检索到底准不准
+
+`eval/` 是一套离线评测：38 张卡片 / 3 个项目 / 5 种 kind / 7 个跨项目共享实体 / 4 条 supersede 链 / 1 张 retracted，25 道检索题（keyword 9、entity-bridge 6、temporal 5、negative 5）外加 4 对（8 条）「问历史 vs 问现状」成对题，跑仓库里真实的 `searchCards`，不自己写一套评分。题目是先写好的，跑完没有改过一个字。
+
+```bash
+npm run eval
+```
+
+当前结果（limit 5、hops 1）：
+
+| 题型 | n | recall@1 | recall@5 | MRR |
+| --- | --- | --- | --- | --- |
+| keyword | 9 | 1.00 | 1.00 | 1.00 |
+| entity-bridge | 6 | 0.67 | 0.94 | 0.83 |
+| temporal | 5 | 0.60 | 1.00 | 0.80 |
+| 历史成对（老卡 vs 继任卡） | 4 对 | — | — | 4/4 |
+| negative（库里没有） | 5 | — | — | 误报 0/5 |
+| 全部 | 25 | 0.80 | **0.98** | 0.90 |
+
+**[`eval/REPORT.md`](eval/REPORT.md) 里写着这份评测没覆盖什么，以及八个已知弱点**——包括「问历史」「问现状」这类意图靠一条正则判断，同样是穷举（实测 10 条变体里仍会漏）；包括「监控之前那套还留着吗」这种问现状却把老卡排第一；包括 `部署`、`流程` 这种有主题义的常见词会让 negative 的判据停在灰区。0/5 只该读作"这 5 条过了"，不该读作"负面问题修好了"；4 对成对题只有 4 对，是抛硬币级别的证据。想信这个分数之前先读那份报告。
+
+一处刻意的设计：**问历史有单独的通路**。「抽取模型现在默认开着吗」会压制作废的旧卡、把现行结论顶上来；「最早那版抽取方案是什么」则反过来，把作废卡还原到满权重。同一批词、不同的时态，答案不是一个——降权不该等于捞不出来。
 
 ## 已知边界
 
 - 检索是关键词 BM25 + 实体扩散，**没有向量召回**。中英文混合场景下中文靠 bigram 分词，可用但不如嵌入模型；卡片量到几千张时应该换。
 - 蒸馏质量取决于抽取模型，且**只在你显式调用时发生**，不会自己跑。建议配合定时任务。
-- 没有 Web UI 图视图，当前靠 `README.md`（自动生成）和文件系统阅读。
+- 图视图是**静态 HTML**（`graph.html`），不是 DSH Web GUI 里的面板；要面板得单独写 client 插件。
 - 卡片去重只按"同项目 + 标题归一化相同"，措辞不同的近义卡片会被存成两张。
 - 没有导出 `Config` schema，所以 Settings 里没有可视化表单；配置走 `cordis.patch.yml`。这是为了让插件保持真正的零依赖（不引用 `@deepseek-ai/schemastery`），代价是配置得写 YAML。
 - 采集粒度是一轮（`turn/end` 触发落盘），不是一条一条消息；一轮里的多次工具调用只记次数不记内容。连续多步的长轮次只留前 6 段可见文本。

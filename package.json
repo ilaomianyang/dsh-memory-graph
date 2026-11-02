@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-memory-graph",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Long-term associative memory for DeepSeek Harness: a local plain-text vault of raw episodes, typed memory cards and entity pages. Zero dependencies, no build step.",
   "keywords": [
@@ -21,15 +21,23 @@
     "index.js",
     "src/*.js",
     "test/*.mjs",
+    "eval/*.mjs",
+    "eval/questions.json",
+    "eval/REPORT.md",
     "cordis.patch.yml",
+    "docs/*.png",
     "locale/*.json",
     "icon.svg",
     "README.md",
     "README.en.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/smoke.mjs && node test/capture.mjs && node test/tools.mjs",
+    "test": "node test/smoke.mjs && node test/capture.mjs && node test/tools.mjs && node test/extract.mjs && node eval/run.mjs",
+    "eval": "node eval/run.mjs",
+    "live": "node test/live.mjs",
+    "live:supersede": "node test/live-supersede.mjs",
     "check": "node --check index.js"
   },
   "dsh": {
