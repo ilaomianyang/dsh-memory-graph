@@ -11,7 +11,7 @@ import { spawnSync } from 'node:child_process'
 
 import { resolveConfig } from '../src/config.js'
 import { createRedactor } from '../src/privacy.js'
-import { createVault } from '../src/vault.js'
+import { createVault, NEAR_DUPLICATE, titleSimilarity } from '../src/vault.js'
 import { searchCards, timelineCards, tokenize } from '../src/search.js'
 import { buildPrompt, parseCards } from '../src/extract.js'
 import { renderGraphHtml } from '../src/graph.js'
@@ -84,6 +84,66 @@ const { card: again, deduped: secondDeduped } = await vault.saveCard({
 check('re-confirms an identical card instead of duplicating', () => {
   assert.equal(secondDeduped, true)
   assert.equal(again.id, storage.id)
+})
+
+/* ------------------------------------------------- near-duplicate titles */
+check('titleSimilarity scores identical and unrelated titles at the ends', () => {
+  assert.equal(titleSimilarity('检索用 BM25', '检索用 BM25'), 1)
+  assert.equal(titleSimilarity('检索用 BM25', '监控从 Zabbix 换到 Uptime Kuma'), 0)
+  assert.equal(titleSimilarity('', 'anything'), 0)
+  const related = titleSimilarity('蒸馏走独立模型接口', '蒸馏用独立模型接口')
+  assert.ok(related > NEAR_DUPLICATE, `related re-wordings must clear the threshold, got ${related}`)
+})
+
+const reworded = await vault.saveCard({
+  kind: 'decision',
+  title: '记忆存储用纯文本而非 SQLite 数据库',
+  body: '纯文本可以 grep、可以 diff、可以随时删除，也不用处理二进制合并。',
+  entities: ['vault格式'],
+  project: 'memory-graph',
+})
+check('a re-worded title re-confirms the card instead of forking the graph', () => {
+  assert.equal(reworded.deduped, true)
+  assert.equal(reworded.card.id, storage.id)
+  assert.equal(reworded.card.title, storage.title, 'the older wording wins, so ids stay stable')
+  assert.match(reworded.card.body, /grep/, 'a fuller body still lands')
+})
+
+const neighbour = await vault.saveCard({
+  kind: 'decision',
+  title: '监控从 Zabbix 换到 Uptime Kuma',
+  body: '外部拨测换成 Kuma，Zabbix 只留下历史数据。',
+  entities: ['监控'],
+  project: 'memory-graph',
+})
+check('a neighbouring topic in the same project stays its own card', () => {
+  assert.equal(neighbour.deduped, false)
+  assert.notEqual(neighbour.card.id, storage.id)
+})
+
+const twin = await vault.saveCard({
+  kind: 'decision',
+  title: '记忆存储用纯文本不仅不是 SQLite',
+  body: '另一个项目的同名记忆不该被跨项目吞掉。',
+  entities: [],
+  project: 'other-project',
+})
+check('dedupe never crosses projects', () => {
+  assert.equal(twin.deduped, false)
+  assert.equal(twin.card.project, 'other-project')
+})
+
+const reversal = await vault.saveCard({
+  kind: 'decision',
+  title: '监控从 Uptime Kuma 换到 Prometheus + Grafana',
+  body: 'Kuma 只留外部拨测。',
+  entities: ['监控'],
+  project: 'memory-graph',
+  supersedes: [neighbour.card.id],
+})
+check('a reversal that names its predecessor is a new card, not a duplicate', () => {
+  assert.equal(reversal.deduped, false)
+  assert.notEqual(reversal.card.id, neighbour.card.id)
 })
 
 const { card: otherProject } = await vault.saveCard({

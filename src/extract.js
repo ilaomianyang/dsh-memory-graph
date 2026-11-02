@@ -335,7 +335,7 @@ async function callHarnessModel(cfg, messages, { signal, llm, selection } = {}) 
       throw new Error('Extractor answered with a tool call instead of JSON. Try a different model for distillation.')
     }
     if (kind === 'max-tokens') {
-      throw new Error(
+      throw truncated(
         `Extractor output reached maxOutputTokens (${cfg.extractor.maxOutputTokens}); raise it or distill fewer episodes per run.`,
       )
     }
@@ -397,6 +397,13 @@ export async function callHttpModel(cfg, messages, { signal } = {}) {
     }
     const content =
       data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? data?.output_text ?? ''
+    if (data?.choices?.[0]?.finish_reason === 'length') {
+      // Same situation as the harness route's max-tokens finish: the answer is
+      // cut off mid-JSON, so ask for less instead of blaming the parser.
+      throw truncated(
+        `Extractor output reached maxOutputTokens (${cfg.extractor.maxOutputTokens}); raise it or distill fewer episodes per run.`,
+      )
+    }
     if (typeof content !== 'string' || content.trim() === '') {
       throw new Error('Extractor returned an empty completion.')
     }
@@ -442,6 +449,25 @@ function dominantProject(entries) {
   return best
 }
 
+/** Stable code for "the model ran out of output budget part-way through". */
+const TRUNCATED = 'EXTRACTOR_TRUNCATED'
+
+/** Rough output cost of one episode: a card, sometimes two. */
+const OUTPUT_TOKENS_PER_EPISODE = 320
+
+function truncated(message) {
+  const error = new Error(message)
+  error.code = TRUNCATED
+  return error
+}
+
+/** How many episodes to send in one call so the answer fits the output budget. */
+export function plannedBatchSize(cfg, total) {
+  const budget = Math.floor((cfg.extractor.maxOutputTokens || 0) / OUTPUT_TOKENS_PER_EPISODE)
+  const fit = Number.isFinite(budget) && budget > 0 ? budget : 1
+  return Math.max(1, Math.min(total, fit))
+}
+
 /**
  * Read undistilled episodes, extract cards, persist them.
  * @returns {Promise<object>} a report the tool renders verbatim
@@ -455,86 +481,161 @@ export async function distill({ cfg, vault, redactor, project, dryRun = false, s
     }
   }
 
-  const limit = cfg.extractor.maxEpisodesPerRun
-  const entries = await vault.readUndistilled(limit)
+  const entries = await vault.readUndistilled(cfg.extractor.maxEpisodesPerRun)
   if (entries.length === 0) {
     return { ok: true, episodes: 0, written: 0, reason: 'Every episode has already been distilled.' }
   }
 
-  const cards = await vault.listCards({ includeRetracted: true })
+  const known = await vault.listCards({ includeRetracted: true })
   // One run can span several projects. The batch is scoped by the projects the
   // episodes actually name, and each card is filed under its own project; the
   // dominant project is only the fallback when a card forgets to say.
   const batchProjects = [...new Set(entries.map((entry) => entry.record.project).filter(Boolean))]
   const dominant = dominantProject(entries) || cfg.defaultProject
-  const scopedProject = project || (batchProjects.length === 1 ? batchProjects[0] : dominant)
-  const messages = buildPrompt(entries, cards, scopedProject)
-  const { content, usage, model: usedModel, keySource } = await callModel(cfg, messages, { signal, llm, selection })
-  const { cards: parsed, skipped, raw } = parseCards(content)
+
+  // One call per batch, not per run: 40 episodes would ask for more cards than
+  // any sane maxOutputTokens allows, and a truncated answer loses the lot.
+  const size = plannedBatchSize(cfg, entries.length)
+  const planned = Math.ceil(entries.length / size)
+
+  const run = { calls: 0, usage: null, model: null, keySource: null }
+  const skippedNotes = []
+
+  /** Ask for one batch, halving and retrying when the output budget ran out. */
+  const ask = async (chunk) => {
+    const projects = [...new Set(chunk.map((entry) => entry.record.project).filter(Boolean))]
+    const scoped = project || (projects.length === 1 ? projects[0] : dominant)
+    const context = [...known, ...written.map((card) => card.card).filter(Boolean)]
+    let answer
+    try {
+      answer = await callModel(cfg, buildPrompt(chunk, context, scoped), { signal, llm, selection })
+    } catch (error) {
+      // A single episode that still overflows is a real failure; with more than
+      // one, the honest fix is to ask for less at a time rather than to give up.
+      if (chunk.length > 1 && error?.code === TRUNCATED) {
+        const half = Math.ceil(chunk.length / 2)
+        return [...(await ask(chunk.slice(0, half))), ...(await ask(chunk.slice(half)))]
+      }
+      throw error
+    }
+    run.calls += 1
+    run.model ??= answer.model
+    run.keySource ??= answer.keySource
+    run.usage = sumUsage(run.usage, answer.usage)
+    return [{ chunk, answer }]
+  }
+
+  const written = []
+  const proposed = []
+  const queue = [...entries]
+  const report = () => ({
+    episodes: dryRun ? Math.min(size, entries.length) : entries.length - queue.length,
+    remaining: queue.length,
+    batches: { planned, done: run.calls, size },
+    skipped: skippedNotes.length === 0 ? null : skippedNotes.join('; ').slice(0, 400),
+    usage: run.usage,
+    model: run.model,
+    keySource: run.keySource,
+  })
+
+  while (queue.length > 0) {
+    const chunk = queue.splice(0, size)
+    let answers
+    try {
+      answers = await ask(chunk)
+    } catch (error) {
+      // Keep whatever already landed: a later batch failing does not undo it.
+      return {
+        ok: false,
+        reason: error.message,
+        written: written.length,
+        cards: written,
+        projects: [...new Set(written.map((card) => card.project))],
+        ...report(),
+      }
+    }
+
+    for (const { chunk: part, answer } of answers) {
+      const parsed = parseCards(answer.content)
+      if (parsed.skipped) skippedNotes.push(parsed.skipped)
+      if (dryRun) {
+        proposed.push(...parsed.cards)
+        continue
+      }
+      const allowed = new Set([...part.map((entry) => entry.record.project), cfg.defaultProject])
+      const partProjects = [...new Set(part.map((entry) => entry.record.project).filter(Boolean))]
+      const fallback = project || (partProjects.length === 1 ? partProjects[0] : dominant)
+      for (const draft of parsed.cards) {
+        const title = redactor.redact(draft.title).text
+        const body = redactor.redact(draft.body).text
+        const entities = draft.entities.map((entity) => redactor.redact(entity).text)
+        const cardProject =
+          project || (draft.project && allowed.has(draft.project) ? draft.project : null) || fallback
+        const result = await vault.saveCard({
+          ...draft,
+          title,
+          body,
+          entities,
+          project: cardProject,
+          source: {
+            kind: 'distill',
+            episodes: part.map((entry) => `${entry.file}#${entry.line}`).slice(0, 50),
+            model: answer.model,
+          },
+        })
+        written.push({
+          id: result.card.id,
+          kind: result.card.kind,
+          project: result.card.project,
+          title: result.card.title,
+          deduped: result.deduped,
+          supersedes: draft.supersedes,
+          card: result.card,
+        })
+      }
+      // Mark per batch: a run that dies half-way should not redo the batches
+      // that already landed.
+      await vault.markDistilled(part)
+    }
+    // A dry run is a preview of one batch; batching the rest would spend the
+    // user's tokens to say the same thing.
+    if (dryRun) break
+  }
 
   if (dryRun) {
     return {
       ok: true,
       dryRun: true,
-      episodes: entries.length,
       projects: batchProjects,
-      proposed: parsed,
-      skipped,
-      usage,
-      model: usedModel,
-      keySource,
-      raw: parsed.length === 0 ? raw : undefined,
+      proposed,
+      ...report(),
     }
   }
 
-  const allowed = new Set([...batchProjects, cfg.defaultProject])
-  const written = []
-  for (const draft of parsed) {
-    const title = redactor.redact(draft.title).text
-    const body = redactor.redact(draft.body).text
-    const entities = draft.entities.map((entity) => redactor.redact(entity).text)
-    const cardProject =
-      project || (draft.project && allowed.has(draft.project) ? draft.project : null) || scopedProject
-    const result = await vault.saveCard({
-      ...draft,
-      title,
-      body,
-      entities,
-      project: cardProject,
-      source: {
-        kind: 'distill',
-        episodes: entries.map((entry) => `${entry.file}#${entry.line}`).slice(0, 50),
-        model: usedModel,
-      },
-    })
-    written.push({
-      id: result.card.id,
-      kind: result.card.kind,
-      project: result.card.project,
-      title: result.card.title,
-      deduped: result.deduped,
-      supersedes: draft.supersedes,
-    })
-  }
-
-  await vault.markDistilled(entries)
   await vault.regenerateReadme()
   await vault.regenerateGraph?.()
   await vault.audit(
     'distill',
-    `projects=${batchProjects.join(',') || scopedProject} episodes=${entries.length} cards=${written.length} model=${usedModel} via=${cfg.extractor.transport} route=${keySource}`,
+    `projects=${batchProjects.join(',') || dominant} episodes=${entries.length} cards=${written.length} batches=${run.calls} model=${run.model} via=${cfg.extractor.transport} route=${run.keySource}`,
   )
 
   return {
     ok: true,
-    episodes: entries.length,
     written: written.length,
-    cards: written,
+    cards: written.map(({ card, ...rest }) => rest),
     projects: [...new Set(written.map((card) => card.project))],
-    skipped,
-    usage,
-    model: usedModel,
-    keySource,
     vault: cfg.vaultDir,
+    ...report(),
   }
+}
+
+/** Add two usage reports without assuming any single field is present. */
+function sumUsage(total, next) {
+  if (!next) return total
+  if (!total) return { ...next }
+  const out = { ...total }
+  for (const [key, value] of Object.entries(next)) {
+    if (typeof value === 'number') out[key] = (typeof out[key] === 'number' ? out[key] : 0) + value
+  }
+  return out
 }

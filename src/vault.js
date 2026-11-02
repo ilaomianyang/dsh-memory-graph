@@ -19,6 +19,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { paths } from './config.js'
 import { renderGraphHtml } from './graph.js'
+import { tokenize } from './search.js'
 
 const CARD_KEYS = [
   'id',
@@ -203,6 +204,31 @@ export function normalizeTitle(title) {
     .replace(/[\s\u3000]+/g, '')
     .replace(/[.,;:!?'"`~!@#$%^&*()_\-+=[\]{}\\|/<>，。；：！？、“”‘’（）【】《》…—]/g, '')
 }
+
+/**
+ * How much two titles have in common, 0..1: Jaccard over the same tokens the
+ * search uses (CJK bigrams, Latin words). Wording varies between extraction
+ * runs — "蒸馏走独立模型接口" and "蒸馏用独立模型接口" are one memory, not two —
+ * and a graph with both has two nodes pulling retrieval apart.
+ */
+export function titleSimilarity(left, right) {
+  const a = new Set(tokenize(left))
+  const b = new Set(tokenize(right))
+  if (a.size === 0 || b.size === 0) return 0
+  let shared = 0
+  for (const token of a) if (b.has(token)) shared += 1
+  return shared / (a.size + b.size - shared)
+}
+
+/**
+ * Two titles are the same memory at this much overlap. Measured on the
+ * evaluation set: unrelated cards in one project peak at 0.20 (the retired
+ * Zabbix card and the Uptime Kuma one that replaced it, which must stay
+ * separate), while the re-wordings one model produced for the same episode
+ * scored 0.60 to 0.78. The threshold sits in that gap, low enough to catch a
+ * short re-wording.
+ */
+export const NEAR_DUPLICATE = 0.55
 
 /* ---------------------------------------------------------------- vault */
 
@@ -424,13 +450,32 @@ export function createVault(cfg, redactor) {
     return cards.find((c) => c.id === id) ?? null
   }
 
-  async function findDuplicate(title, project) {
+  /**
+   * The card this write would duplicate: an exact title first, then the closest
+   * re-wording of an existing active title in the same project. A card that
+   * names its predecessor is a reversal, not a duplicate: "监控换成 X" after
+   * "监控换到 Y" reads alike but is a new decision, so `supersedes` turns the
+   * near-duplicate pass off and only an exact title can match.
+   * @returns {Promise<{card: object, exact: boolean, score: number}|null>}
+   */
+  async function findDuplicate(title, project, { allowNear = true } = {}) {
     const target = normalizeTitle(title)
     if (target === '') return null
-    const cards = await listCards()
-    return (
-      cards.find((c) => c.project === project && normalizeTitle(c.title) === target) ?? null
-    )
+    const cards = (await listCards()).filter((card) => card.project === project)
+    const exact = cards.find((card) => normalizeTitle(card.title) === target)
+    if (exact) return { card: exact, exact: true, score: 1 }
+    if (!allowNear) return null
+    let best = null
+    let bestScore = 0
+    for (const card of cards) {
+      if (card.status !== 'active') continue
+      const score = titleSimilarity(title, card.title)
+      if (score >= NEAR_DUPLICATE && score > bestScore) {
+        best = card
+        bestScore = score
+      }
+    }
+    return best ? { card: best, exact: false, score: bestScore } : null
   }
 
   /**
@@ -441,7 +486,10 @@ export function createVault(cfg, redactor) {
     await ensure()
     return withLock('cards', async () => {
       const project = input.project || cfg.defaultProject
-      const existing = await findDuplicate(input.title, project)
+      const duplicate = await findDuplicate(input.title, project, {
+        allowNear: (input.supersedes ?? []).length === 0,
+      })
+      const existing = duplicate?.card ?? null
       const stamp = nowIso()
 
       if (existing) {
@@ -453,7 +501,10 @@ export function createVault(cfg, redactor) {
         await writeAtomic(cardPath(existing), renderCard(existing))
         invalidate()
         await touchProject(project)
-        await audit('card', `re-confirmed ${existing.id} "${existing.title}"`)
+        const why = duplicate.exact
+          ? ''
+          : ` (near-duplicate ${duplicate.score.toFixed(2)} of "${String(input.title ?? '').trim()}")`
+        await audit('card', `re-confirmed ${existing.id} "${existing.title}"${why}`)
         return { card: existing, deduped: true }
       }
 

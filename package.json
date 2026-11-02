@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-memory-graph",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "description": "Long-term associative memory for DeepSeek Harness: a local plain-text vault of raw episodes, typed memory cards and entity pages, configured from 设置 → 记忆图谱. No build step; the only dependency is the harness's own schema library, used for the Settings page.",
   "keywords": [

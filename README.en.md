@@ -162,6 +162,14 @@ One file is one memory. Append-only. No binaries, no lockfiles. Run `git init` i
 
 Why only those 28 are editable there: the harness projects **only fields declared `volatile`** — the ones read each time they are used. Everything marked ✓ is read at call time, so one save changes the next call. `enabled` / `vaultDir` / `defaultProject` / `crossProject` are consumed during activation and would need a remount, so they are left out rather than shown as knobs that do nothing; the page's footer says exactly that.
 
+### One distillation runs in batches
+
+`maxEpisodesPerRun` is how many episodes **one distillation** may read, not how many go into one model call. The plugin derives the batch size from `maxOutputTokens` (roughly 320 output tokens per episode), one call per batch, each batch committed before the next: forty episodes become five small calls instead of one request asked to produce forty cards.
+
+Two reasons. The answer has to fit the output budget; and when one batch fails (rate limit, timeout, dropped connection) the cards from the earlier ones are already written and the distillation cursor already moved, so a re-run only picks up the rest. If a batch is still truncated anyway, the plugin halves it and retries — a single episode that overflows is the only real failure, and it is reported as such (the `maxOutputTokens` message).
+
+`memory_distill` with `dryRun` previews the first batch only and says how many episodes are left: a preview should not spend your budget on the whole backlog.
+
 
 ### Two ways to hook up the extractor
 
@@ -266,22 +274,24 @@ Side benefit: an injected message no longer cuts a turn in half, so an episode's
 No network, no real vault:
 
 ```bash
-npm test        # 38 + 13 + 20 + 11 + 21 + 48 = 151 checks, plus the 25-question retrieval eval
+npm test        # 43 + 13 + 20 + 11 + 21 + 54 = 162 checks, plus the 25-question retrieval eval
 npm run eval    # retrieval eval only (offline, deterministic)
 ```
 
-- `test/smoke.mjs` — storage, redaction, BM25 retrieval, entity expansion, supersede chain, extractor parsing
+- `test/smoke.mjs` — storage, redaction, BM25 retrieval, entity expansion, supersede chain, extractor parsing; and near-duplicate titles not forking the graph (a re-worded card folds into the old one, the fuller body wins, never across projects, and a card that names its `supersedes` is a reversal rather than a duplicate)
 - `test/schema.mjs` — the Settings page must not drift from the runtime: every leaf of `Config({})` is compared with `resolveConfig({})` in both directions (`vaultDir` is the one exception — the page holds raw text, the runtime an absolute path), so a dead control and an invisible setting both fail; plus the transport union, numeric bounds, the `secret` role on the inline key, the 28 volatile leaves matching the page's field table exactly, and the four structural keys staying off it
 - `test/client.mjs` — mounts the page on a minimal React stand-in: the controls drawn equal the fields that should show, switching `transport` reveals the http knobs, an empty inline key is never sent as a deletion, an out-of-range number never reaches the wire, a refused save clears the drafts and explains itself, restore sends `unset` rather than `set`, the stylesheet is a single `<style>` tagged with the package name, and `client.js` contains no `export`/`import` (the loader evaluates it as a script). It then evaluates `client.js` in a fake page carrying `window.__ModuleLoader__` and walks the real browser path — factory, `apply`, `settings.section` registration — checking that `react` is the only module required, the registration id is the package name, the order is 25, and the sidebar label follows the page language
 - `test/capture.mjs` — drives the capture listener with real `session/event` shapes, including injected context
 - `test/tools.mjs` — runs `execute` + `render` for all eight tools
-- `test/extract.mjs` — the extractor: `fetch` stubbed for the http route (prompt construction, key resolution order, tolerant JSON parsing, per-card project attribution, cursor advance, dry run writing nothing, secrets stopped before the write), then a fake `llm` service for the harness route (borrows the Settings model and thinking level, honours an explicit override, explains a missing selection, handles every terminal `finish`, reports cancellation, rejects an empty completion, and never touches `fetch`)
+- `test/extract.mjs` — the extractor: `fetch` stubbed for the http route (prompt construction, key resolution order, tolerant JSON parsing, per-card project attribution, cursor advance, dry run writing nothing, secrets stopped before the write), then a fake `llm` service for the harness route (borrows the Settings model and thinking level, honours an explicit override, explains a missing selection, handles every terminal `finish`, reports cancellation, rejects an empty completion, and never touches `fetch`), and finally batching: the batch size derived from the output budget, a long backlog split across calls, a truncated batch halved and retried, earlier batches kept when a later one fails, and `dryRun` previewing only the first batch
 
 Two suites do touch the network (and cost money), so they are not in `npm test`:
 
 ```bash
 npm run live             # real model, end to end: 3 episodes → distill → search them back
 npm run live:supersede   # real model: record a decision, then correct it, check the supersede chain
+node test/live.mjs --backlog 12 --tokens 3000   # 12 episodes, watch it really split into two batches
+node test/live.mjs --tokens 900                 # a small output cap, watch a truncation split in half
 ```
 
 They read the key from `~/.dsh/.credentials.yaml` or the environment (see above); nothing is hard-coded or persisted. Both run in a plain `node` process with no harness `llm` service to borrow, so they set `transport: 'http'` explicitly — the plugin's own default is `harness`.
@@ -294,6 +304,9 @@ With `deepseek-chat` via `npm run live`:
 | --- | --- | --- | --- |
 | 3 synthetic episodes (mixed zh/en, 2 projects) | 5 cards, project attribution 5/5 correct | 2.9 s / 3.6 s (two runs) | ≈1,590 |
 | a real 266-event session log → 2 captured episodes (1,501 + 278 chars) | 9 cards (8 decision + 1 preference), Chinese in, Chinese out | 5.9 s | 2,816 (prompt 1,795 / completion 1,021) |
+| 12 episodes (one conversation repeated four times, to force duplicates) | 2 batches (9 + 3) → 4 cards, the second batch entirely re-confirmations | 5.9 s | 4,153 (prompt 3,114 / completion 1,039) |
+
+The first version fed every pending episode into a single call. Its first run against a real vault hit the wall: 23 episodes wanted thirty-odd cards, 3,000 output tokens cut the answer off, and the whole run was wasted. Now it batches by the output budget — **the same backlog, as several small calls, is both faster and harder to break**.
 
 `npm run live:supersede` checks that temporal validity actually moves: round one records "share it on GitHub", round two the user corrects "the *plugin* is shared, not the memories"; the extractor fills `supersedes` itself, the old card flips to `superseded` with a `valid_to`, and the two link to each other. Offline tests can prove the mechanism, not that a model will use it.
 
@@ -328,11 +341,11 @@ One deliberate asymmetry: **asking about the past gets its own path**. "Is the e
 - Distillation quality depends on the extractor model and **only happens when you call it**. Pair it with a scheduled task.
 - Harness mode borrows "whatever model is currently selected in Settings", so switching models mid-conversation also switches the extractor; turn `useCurrentModel` off to pin one. It spends that provider's quota — being a plugin does not make the calls free.
 - The graph view is a **static HTML file** (`graph.html`), not a panel inside the DSH Web GUI; a panel would be a separate client plugin.
-- Deduplication only matches "same project + same normalized title". Paraphrases become two cards.
+- Deduplication starts at "same project + same normalized title" and widens to titles sharing **at least 0.55 of their tokens** (the same bigram tokenizer retrieval uses; measured on the eval set: unrelated cards peak at 0.20, one model's re-wordings of the same memory scored 0.60–0.78). So "蒸馏走独立模型接口" and "蒸馏用独立模型接口" are now one card instead of two nodes pulling retrieval apart. A card that carries `supersedes` skips that pass — "monitoring moves to Prometheus" reads like "monitoring moved to Uptime Kuma" but is a new decision. Opposite meanings phrased far apart still become two cards: this compares wording, it does not read intent.
 - The page is four static section cards drawn from a hand-written field table, not a generic reflection of the schema; `test/schema.mjs` keeps the two in sync, but a schema change that skips that table will show up as a failing test rather than a new control. Array-valued keys (`skipPatterns`, `denyPatterns`) are still edited as one entry per line in a text area.
 - Anything changed outside the page is picked up on the next save round-trip: the page re-reads the served value and keeps your unsaved drafts, but it does not poll.
 - Capture granularity is one turn (flushed on `turn/end`), not one message; tool calls inside a turn are counted, not recorded. A long multi-step turn keeps the first six visible text blocks.
-- The vault writes its own `.gitignore` (ignoring `*.tmp`, OS junk and `.distill-state.json`); the last one is a per-machine distillation cursor, so a synced vault re-distills once on the other machine and relies on title dedup.
+- The vault writes its own `.gitignore` (ignoring `*.tmp`, OS junk and `.distill-state.json`); the last one is a per-machine distillation cursor, so a synced vault re-distills once on the other machine and relies on title dedup (near-duplicates included).
 
 ## License
 

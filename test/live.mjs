@@ -4,6 +4,8 @@
  *
  *   node test/live.mjs                      # seeded episodes, Chinese + English
  *   node test/live.mjs --log <session.jsonl> # replay a real session log instead
+ *   node test/live.mjs --backlog 12          # 12 seeded episodes, to watch it batch
+ *   node test/live.mjs --tokens 900          # a small output budget, to watch it split
  *   node test/live.mjs --dry                # show what the model proposes, write nothing
  *   node test/live.mjs --keep               # leave the temp vault on disk to look at
  *
@@ -40,6 +42,7 @@ const cfg = resolveConfig({
     apiKeyEnv: process.env.LIVE_KEY_ENV || 'DEEPSEEK_API_KEY',
     baseUrl: process.env.LIVE_BASE_URL || 'https://api.deepseek.com/v1',
     model: process.env.LIVE_MODEL || 'deepseek-chat',
+    ...(value('tokens') ? { maxOutputTokens: Number(value('tokens')) } : {}),
   },
 })
 const redactor = createRedactor(cfg.privacy)
@@ -100,8 +103,21 @@ if (value('log')) {
   await new Promise((resolve) => setTimeout(resolve, 400))
   console.log(`replayed ${seen} events from ${value('log')}`)
 } else {
-  for (const episode of SEED) await vault.appendEpisode(episode)
-  console.log(`seeded ${SEED.length} episodes`)
+  const want = Number(value('backlog') ?? 0)
+  let i = 0
+  do {
+    const template = SEED[i % SEED.length]
+    const round = Math.floor(i / SEED.length)
+    await vault.appendEpisode({
+      ...template,
+      // Same content, different turn: a backlog has to look like a real session
+      // continuing rather than the same episode copied verbatim.
+      t: new Date(Date.parse(template.t) + round * 3600_000).toISOString(),
+      user: round === 0 ? template.user : `${template.user}（第 ${round + 1} 次讨论）`,
+    })
+    i += 1
+  } while (i < Math.max(SEED.length, want))
+  console.log(`seeded ${i} episodes`)
 }
 
 const stats = await vault.stats()
@@ -113,7 +129,8 @@ if (stats.episodes.records === 0) {
 
 const started = Date.now()
 const report = await distill({ cfg, vault, redactor, dryRun: flag('dry') })
-console.log(`\ndistill ${report.ok ? 'ok' : 'FAILED'} in ${Date.now() - started}ms · key=${report.keySource ?? '?'} · ${report.episodes} episode(s)`)
+const batching = report.batches ? ` · ${report.batches.done}/${report.batches.planned} batch(es) of ${report.batches.size}` : ''
+console.log(`\ndistill ${report.ok ? 'ok' : 'FAILED'} in ${Date.now() - started}ms · key=${report.keySource ?? '?'} · ${report.episodes} episode(s)${batching}`)
 
 if (!report.ok) {
   console.error(report.reason)
@@ -124,7 +141,8 @@ if (report.dryRun) {
   console.log(`\nskipped: ${report.skipped ?? '-'}`)
 } else {
   for (const card of report.cards) console.log(`  ${card.id} [${card.kind}] ${card.title}${card.deduped ? ' (dup)' : ''}`)
-  console.log(`written: ${report.written}/${report.cards.length + (report.written - report.cards.length)} · usage: ${JSON.stringify(report.usage)}`)
+  const fresh = report.cards.filter((card) => !card.deduped).length
+  console.log(`written: ${fresh} new · ${report.cards.length - fresh} re-confirmed · usage: ${JSON.stringify(report.usage)}`)
   console.log(`skipped: ${report.skipped ?? '-'}`)
 
   // The loop only closes if what was written can be found again.

@@ -480,12 +480,28 @@ export function registerTools(ctx, { cfg, vault, redactor }) {
           ...extractorServices(ctx),
         })
         const lines = []
-        if (!report.ok) lines.push(`Not distilled: ${report.reason}`)
-        else if (report.episodes === 0) lines.push(report.reason ?? 'Nothing new to distill.')
+        const batches = report.batches
+        if (!report.ok) {
+          lines.push(`Not distilled: ${report.reason}`)
+          // Batches before the failure already landed; say so, or the next call
+          // looks like it started from nowhere.
+          if (report.written > 0) {
+            lines.push(`  kept ${report.written} card(s) from ${batches?.done ?? 1} earlier batch(es).`)
+            for (const card of report.cards ?? []) lines.push(`  ${card.id} · ${card.kind} · ${card.title}`)
+          }
+        } else if (report.episodes === 0) lines.push(report.reason ?? 'Nothing new to distill.')
         else {
-          lines.push(`Read ${report.episodes} episode(s) → ${report.written} card(s)${report.dryRun ? ' (dry run, nothing written)' : ''}.`)
+          const calls = batches && batches.done > 1 ? ` in ${batches.done} batches of ${batches.size}` : ''
+          const count = report.written ?? report.proposed?.length ?? 0
+          const found = report.cards?.length ?? count
+          const fresh = report.cards ? report.cards.filter((card) => !card.deduped).length : count
+          const reconfirmed = found - fresh > 0 ? ` · ${found - fresh} re-confirmed` : ''
+          lines.push(`Read ${report.episodes} episode(s) → ${fresh} card(s)${reconfirmed}${calls}${report.dryRun ? ' (dry run, nothing written)' : ''}.`)
           for (const card of report.cards ?? report.proposed ?? []) {
             lines.push(`  ${card.id ?? '(proposed)'} · ${card.kind} · ${card.title}${card.deduped ? ' (re-confirmed)' : ''}`)
+          }
+          if (report.dryRun && report.remaining > 0) {
+            lines.push(`  dry run covered the first ${report.episodes} of ${report.episodes + report.remaining}; a real run keeps going in batches.`)
           }
           if (report.skipped) lines.push(`  skipped: ${report.skipped}`)
           if (report.model) lines.push(`  model: ${report.model}${report.keySource ? ` · ${report.keySource}` : ''}`)
@@ -493,7 +509,7 @@ export function registerTools(ctx, { cfg, vault, redactor }) {
         }
         // Distillation is the biggest writer of all: without this the graph and
         // the README would only catch up on the next remember/forget.
-        if (report.ok && !report.dryRun && report.episodes > 0) await refreshViews()
+        if (!report.dryRun && report.written > 0) await refreshViews()
         return { ...report, text: lines.join('\n') }
       },
     }),

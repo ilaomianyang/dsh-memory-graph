@@ -11,7 +11,7 @@ import path from 'node:path'
 import { resolveConfig } from '../src/config.js'
 import { createRedactor } from '../src/privacy.js'
 import { createVault } from '../src/vault.js'
-import { buildPrompt, callModel, distill, parseCards, readCredentialRef, resolveKeyInfo, resolveRoute, selectionEffort } from '../src/extract.js'
+import { buildPrompt, callModel, distill, parseCards, plannedBatchSize, readCredentialRef, resolveKeyInfo, resolveRoute, selectionEffort } from '../src/extract.js'
 
 const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'memgraph-extract-'))
 const results = []
@@ -362,21 +362,32 @@ await checkAsync('distill does not write a card whose body carries a secret thro
  * proposed, applies the `configure` callback the way the real service does, and
  * streams whatever chunks the case needs.
  */
-function stubLlm({ chunks, delayMs = 0 } = {}) {
+function stubLlm({ chunks, script, delayMs = 0 } = {}) {
   const seen = []
+  let calls = 0
+  const reply = () => {
+    // `script` gives one answer per model call; `chunks` repeats for all of them.
+    if (Array.isArray(script)) return script[Math.min(calls, script.length - 1)]
+    return chunks
+  }
   return {
     seen,
+    get calls() {
+      return calls
+    },
     llm: {
       async prepareCall(config, signal, configure) {
         const resolved = configure ? { ...config, ...configure(config, { reasoning: { efforts: [] } }) } : { ...config }
         seen.push({ config: resolved, signal })
+        const answer = reply()
+        calls += 1
         return {
           config: resolved,
           stream(options) {
             seen.push({ options })
             return (async function* () {
               if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
-              for (const chunk of chunks ?? [
+              for (const chunk of answer ?? [
                 { type: 'text-delta', index: 0, text: '{"cards":[]}' },
                 { type: 'usage', usage: { totalTokens: 7 } },
                 { type: 'finish', reason: { kind: 'stop' } },
@@ -390,6 +401,23 @@ function stubLlm({ chunks, delayMs = 0 } = {}) {
     },
   }
 }
+
+/** One model answer that contains these card titles. */
+const cardsChunks = (...titles) => [
+  {
+    type: 'text-delta',
+    index: 0,
+    text: JSON.stringify({ cards: titles.map((title) => ({ kind: 'note', title, body: 'body' })) }),
+  },
+  { type: 'usage', usage: { totalTokens: 100 } },
+  { type: 'finish', reason: { kind: 'stop' } },
+]
+
+/** One model answer that ran out of output budget. */
+const truncatedChunks = [
+  { type: 'text-delta', index: 0, text: '{"cards":[{"kind":"note","title":"cut' },
+  { type: 'finish', reason: { kind: 'max-tokens' } },
+]
 
 check('resolveRoute borrows the model selected in Settings', () => {
   const route = resolveRoute(harnessCfg(), { provider: 'wb', model: 'deepseek-v4.1-flash' })
@@ -526,6 +554,99 @@ await checkAsync('distill over the harness transport records the borrowed route 
   assert.equal(card.source.model, 'wb/deepseek-v4.1-flash')
   assert.equal(calls.length, 0, 'the harness transport must not touch fetch')
   await fsp.rm(llmDir, { recursive: true, force: true })
+})
+
+// ---------------------------------------------------------------------------
+// Batching: one call per batch, so the answer fits the output budget
+// ---------------------------------------------------------------------------
+
+/** A vault with `count` undistilled episodes and a harness-only extractor. */
+async function backlog(count, overrides = {}) {
+  const vaultDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'memgraph-batch-'))
+  const cfg = resolveConfig({ vaultDir, extractor: { enabled: true, ...overrides } })
+  const redactor = createRedactor(cfg.privacy)
+  const vault = createVault(cfg, redactor)
+  for (let i = 0; i < count; i += 1) {
+    await vault.appendEpisode({ project: 'p', t: `2026-10-${String((i % 28) + 1).padStart(2, '0')}T09:00:00+08:00`, user: `turn ${i}`, assistant: 'ok' })
+  }
+  return { cfg, redactor, vault, vaultDir }
+}
+
+check('plannedBatchSize fits the output budget and never exceeds the backlog', () => {
+  assert.equal(plannedBatchSize(harnessCfg({ maxOutputTokens: 3000 }), 23), 9)
+  assert.equal(plannedBatchSize(harnessCfg({ maxOutputTokens: 3000 }), 3), 3)
+  assert.equal(plannedBatchSize(harnessCfg({ maxOutputTokens: 400 }), 23), 1)
+  assert.equal(plannedBatchSize(harnessCfg({ maxOutputTokens: 100 }), 23), 1, 'one episode per call is the floor')
+})
+
+await checkAsync('a long backlog is distilled in batches of the planned size', async () => {
+  const { cfg, redactor, vault, vaultDir } = await backlog(20, { maxOutputTokens: 3000 })
+  const stub = stubLlm({ script: [cardsChunks('first'), cardsChunks('second'), cardsChunks('third')] })
+  const report = await distill({ cfg, vault, redactor, llm: stub.llm, selection: { provider: 'p', model: 'm' } })
+  assert.equal(report.ok, true)
+  assert.equal(report.episodes, 20, 'every episode is covered, in steps of nine')
+  assert.deepEqual(report.batches, { planned: 3, done: 3, size: 9 })
+  assert.equal(stub.calls, 3, 'nine, nine, two — three calls, not one forty-episode request')
+  assert.equal(report.written, 3)
+  assert.equal(report.usage.totalTokens, 300, 'usage is summed across batches')
+  assert.equal((await vault.readUndistilled(100)).length, 0, 'the whole backlog is marked distilled')
+  await fsp.rm(vaultDir, { recursive: true, force: true })
+})
+
+await checkAsync('a truncated batch is halved and retried instead of failing the run', async () => {
+  const { cfg, redactor, vault, vaultDir } = await backlog(4, { maxOutputTokens: 3000 })
+  // Four episodes fit one call; the model still runs out, so the run must ask
+  // for half of them rather than give up on the backlog.
+  const stub = stubLlm({ script: [truncatedChunks, cardsChunks('left half'), cardsChunks('right half')] })
+  const report = await distill({ cfg, vault, redactor, llm: stub.llm, selection: { provider: 'p', model: 'm' } })
+  assert.equal(report.ok, true)
+  assert.equal(report.episodes, 4)
+  assert.equal(stub.calls, 3, 'one overflow, then two halves')
+  assert.equal(report.written, 2)
+  assert.equal((await vault.readUndistilled(100)).length, 0)
+  await fsp.rm(vaultDir, { recursive: true, force: true })
+})
+
+await checkAsync('a single episode that overflows is reported, not retried forever', async () => {
+  const { cfg, redactor, vault, vaultDir } = await backlog(1, { maxOutputTokens: 3000 })
+  const stub = stubLlm({ chunks: truncatedChunks })
+  const report = await distill({ cfg, vault, redactor, llm: stub.llm, selection: { provider: 'p', model: 'm' } })
+  assert.equal(report.ok, false)
+  assert.match(report.reason, /maxOutputTokens/)
+  assert.equal(stub.calls, 1)
+  await fsp.rm(vaultDir, { recursive: true, force: true })
+})
+
+await checkAsync('a later batch failing keeps the cards the earlier ones wrote', async () => {
+  const { cfg, redactor, vault, vaultDir } = await backlog(10, { maxOutputTokens: 1600 })
+  const failing = [{ type: 'finish', reason: { kind: 'error', failure: { code: 'RATE_LIMIT', message: 'slow down' } } }]
+  const { llm } = stubLlm({ script: [cardsChunks('kept'), failing] })
+  const report = await distill({ cfg, vault, redactor, llm, selection: { provider: 'p', model: 'm' } })
+  assert.equal(report.ok, false, 'the run did not finish')
+  assert.match(report.reason, /RATE_LIMIT/)
+  assert.equal(report.written, 1, 'the first batch stays written')
+  assert.equal(report.cards.length, 1)
+  assert.equal(report.batches.done, 1)
+  const cards = await vault.listCards({ includeRetracted: true })
+  assert.equal(cards.length, 1)
+  assert.equal(cards[0].title, 'kept')
+  assert.equal((await vault.readUndistilled(100)).length, 5, 'only the finished batch is marked')
+  await fsp.rm(vaultDir, { recursive: true, force: true })
+})
+
+await checkAsync('a dry run previews one batch and says how much is left', async () => {
+  const { cfg, redactor, vault, vaultDir } = await backlog(20, { maxOutputTokens: 3000 })
+  const stub = stubLlm({ script: [cardsChunks('preview one', 'preview two')] })
+  const report = await distill({ cfg, vault, redactor, llm: stub.llm, selection: { provider: 'p', model: 'm' }, dryRun: true })
+  assert.equal(report.ok, true)
+  assert.equal(report.dryRun, true)
+  assert.equal(stub.calls, 1, 'a preview spends one call, not three')
+  assert.equal(report.episodes, 9)
+  assert.equal(report.remaining, 11)
+  assert.deepEqual(report.proposed.map((card) => card.title), ['preview one', 'preview two'])
+  assert.equal((await vault.listCards({ includeRetracted: true })).length, 0, 'nothing is written')
+  assert.equal((await vault.readUndistilled(100)).length, 20, 'nothing is marked distilled')
+  await fsp.rm(vaultDir, { recursive: true, force: true })
 })
 
 globalThis.fetch = realFetch
