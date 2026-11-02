@@ -1,0 +1,9 @@
+- insert:
+    - id: memory-graph
+      name: '@local/dsh-memory-graph'
+      config:
+        vaultDir: ''
+        capture:
+          enabled: true
+        extractor:
+          enabled: false

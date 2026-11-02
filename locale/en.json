@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Memory Graph",
+    "description": "Long-term associative memory in a plain-text vault: episodes, typed cards, entity pages and a timeline. Readable on GitHub, diffable, no database."
+  }
+}
