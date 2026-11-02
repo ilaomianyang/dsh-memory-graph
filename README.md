@@ -107,9 +107,7 @@ plugin_manager action=install_bundle target="<本仓库绝对路径>"
       denyPatterns: ['我的内部域名\\.corp']
     extractor:
       enabled: true
-      baseUrl: 'https://api.deepseek.com/v1'
-      model: 'deepseek-chat'
-      apiKeyEnv: 'MEMORY_LLM_API_KEY'   # 从环境变量读，不写进配置文件
+      transport: 'harness'      # 默认：跟随设置里选中的模型，不用自己配 key
       maxEpisodesPerRun: 40
     retrieval:
       limit: 8
@@ -125,17 +123,36 @@ plugin_manager action=install_bundle target="<本仓库绝对路径>"
 | `privacy.useDefaultPatterns` | `true` | 内置密钥/私钥/token 规则 |
 | `privacy.denyPatterns` | `[]` | 追加你自己的正则，支持 `(?i)` 前缀 |
 | `extractor.enabled` | `false` | 关闭时只采集不蒸馏，不产生任何模型调用 |
-| `extractor.baseUrl` | `https://api.deepseek.com/v1` | 任何 OpenAI 兼容端点都行（自建网关、其他厂商） |
-| `extractor.model` | `deepseek-chat` | 抽取用的模型 |
-| `extractor.apiKeyEnv` | `MEMORY_LLM_API_KEY` | key 从这个环境变量名的来源里找 |
+| `extractor.transport` | `harness` | `harness` = 借用设置里的模型；`http` = 自己填 endpoint 直连 |
+| `extractor.useCurrentModel` | `true` | harness 模式下是否跟随当前选中的模型 |
+| `extractor.provider` | `''` | harness 模式：关掉「跟随」后指定提供商 id |
+| `extractor.reasoningEffort` | `''` | harness 模式：思考强度，留空则沿用设置里的那一档 |
+| `extractor.baseUrl` | `https://api.deepseek.com/v1` | http 模式：任何 OpenAI 兼容端点 |
+| `extractor.path` | `/chat/completions` | http 模式：路径 |
+| `extractor.model` | `deepseek-chat` | http 模式：模型 id |
+| `extractor.apiKeyEnv` | `MEMORY_LLM_API_KEY` | http 模式：key 从这个环境变量名的来源里找 |
+| `extractor.temperature` | `0.1` | 仅 http 模式：harness 模式下采样由被借用的模型设置决定 |
 | `extractor.maxEpisodesPerRun` | `40` | 一次蒸馏最多喂多少条情节 |
 | `retrieval.hops` | `1` | 联想扩散跳数，0 = 只做关键词 |
 
-**抽取器是独立的**，用自己的 endpoint 和模型，不占用对话模型的额度。
+### 抽取器接在哪：两条路
+
+**A. 跟随设置里的模型（默认）**
+
+`transport: 'harness'` 时，插件不碰 key、不碰 endpoint，直接向 Harness 的 `llm` 服务要一次调用，用的是你在 **Settings → 模型** 里选中的那一路：提供商、模型、思考强度（thinking）全部照搬。你在设置里给模型配过 key 了，插件就不用再要第二个。
+
+- 想换抽取用的模型？在设置里换，插件下一次蒸馏就跟上。
+- 想固定一个便宜的小模型专门做抽取？把 `useCurrentModel` 关掉，填 `provider` + `model`（例如 `deepseek` / `deepseek-chat`），key 仍然是设置里那套。
+- 想跑更省或更强的思考档？填 `reasoningEffort`，取值是那个模型在设置里给出的档位 id（如 `high`）；留空就沿用设置里的选择。
+- 这条路上没有密钥可泄露：插件全程只报"用了哪个提供商/模型/档位"，不接触凭据值。
+
+**B. 自己填 endpoint 直连（`http`）**
+
+抽取器完全独立，用自己的端点、模型和额度。适合：抽取想用一个别处的小模型、想接到自建网关、或者这个 Harness 构建里没有暴露 `llm` 服务。
 
 设置表单里也有 `extractor.apiKey` 一栏，但你**最好别用它**：表单里填的值会明文落进 profile 的配置里。用 `apiKeyEnv` 指个名字、把值放进环境变量或 `~/.dsh/.credentials.yaml`，是这个插件设计上的默认路线。
 
-### key 从哪来
+### http 模式的 key 从哪来
 
 按这个顺序找，找到就用，一路都不写进日志、不写进审计、不写进记忆库：
 
@@ -143,7 +160,7 @@ plugin_manager action=install_bundle target="<本仓库绝对路径>"
 2. 进程环境变量 `extractor.apiKeyEnv` 指定的那个名字
 3. **Harness 自己的凭据库** `~/.dsh/.credentials.yaml` 里 `refs.<apiKeyEnv>` 指向的条目
 
-第 3 条的意思是：如果你已经把 key 配给 Harness 用（比如 `DEEPSEEK_API_KEY`），把 `apiKeyEnv` 改成同名就行，不用再导出环境变量。读凭据库时只解析 `refs:` 那一段，别的内容不碰。`memory_stats` 会告诉你这次蒸馏用的是哪一路（`source` 字段），但永远只报来源、不报值。
+第 3 条的意思是：如果你已经把 key 配给 Harness 用（比如 `DEEPSEEK_API_KEY`），把 `apiKeyEnv` 改成同名就行，不用再导出环境变量。读凭据库时只解析 `refs:` 那一段，别的内容不碰。`memory_stats` 会告诉你这次蒸馏走的是哪条路、用的哪个模型（`extractor:` 那一行），但永远只报来源、不报值。
 
 ## 工具
 
@@ -228,7 +245,7 @@ npm run eval    # 只跑检索评测（离线，确定性的）
 - `test/smoke.mjs` — 存储、隐私过滤、BM25 检索、实体扩散、supersede 链、蒸馏结果解析
 - `test/capture.mjs` — 用真实的 `session/event` 形状驱动采集，验证一轮一情节、密钥被拦、短轮不入库、注入消息不入库
 - `test/tools.mjs` — 逐个跑 8 个工具的 `execute` + `render`
-- `test/extract.mjs` — 抽取器：`fetch` 打桩，验证提示词构造、key 解析顺序、JSON 解析容错、每张卡片归到自己的项目、游标前进、dry run 不落盘、密钥在写入前被拦住
+- `test/extract.mjs` — 抽取器：`fetch` 打桩验证 http 路线（提示词构造、key 解析顺序、JSON 解析容错、每张卡片归到自己的项目、游标前进、dry run 不落盘、密钥在写入前被拦住），再用一个假的 `llm` 服务验证 harness 路线（借用设置里的模型与思考档、显式覆盖、没有选中模型时的报错、`finish` 各种终态、空回复、以及全程不碰 `fetch`）
 
 下面两个测试会真的联网/花钱，所以不在 `npm test` 里，要自己跑：
 
@@ -279,6 +296,7 @@ npm run eval
 
 - 检索是关键词 BM25 + 实体扩散，**没有向量召回**。中英文混合场景下中文靠 bigram 分词，可用但不如嵌入模型；卡片量到几千张时应该换。
 - 蒸馏质量取决于抽取模型，且**只在你显式调用时发生**，不会自己跑。建议配合定时任务。
+- harness 模式借的是「设置里当前选中的那个模型」，所以你在对话里换模型，抽取也跟着换；想钉死一个抽取专用模型就把 `useCurrentModel` 关掉。另外它花的是同一个模型提供商的额度，不会因为"插件"就变免费。
 - 图视图是**静态 HTML**（`graph.html`），不是 DSH Web GUI 里的面板；要面板得单独写 client 插件。
 - 卡片去重只按"同项目 + 标题归一化相同"，措辞不同的近义卡片会被存成两张。
 - 设置表单是 schemastery 生成的通用表单：字段有中英文说明，但**没有分组标题、没有自定义控件**，`skipPatterns` / `denyPatterns` 这种数组只能一行一条地编辑。要更好看的配置界面得自己写 client 侧的面板。

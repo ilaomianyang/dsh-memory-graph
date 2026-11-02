@@ -58,6 +58,19 @@ const DEFAULTS = {
   },
   extractor: {
     enabled: false,
+    /**
+     * `harness` borrows a route the Settings → Models page already configured
+     * (provider, key, base URL, thinking level), so the extractor needs no
+     * credentials of its own. `http` posts to an OpenAI-compatible endpoint with
+     * the key below, for machines where no model is configured in Settings.
+     */
+    transport: 'harness',
+    /** harness: follow the model currently selected in Settings instead of provider/model. */
+    useCurrentModel: true,
+    /** harness: provider route id, e.g. `deepseek`, `wb`, `agy-local`. */
+    provider: '',
+    /** harness: thinking level for this call, when the route offers one. '' keeps the route default. */
+    reasoningEffort: '',
     baseUrl: 'https://api.deepseek.com/v1',
     path: '/chat/completions',
     model: 'deepseek-chat',
@@ -143,9 +156,20 @@ export function resolveConfig(raw) {
       })
     : []
 
+  // Anything that is not the explicit escape hatch means the borrowed route:
+  // a stale or misspelled transport must not silently become an HTTP call that
+  // fails later for a missing key.
+  cfg.extractor.transport = cfg.extractor.transport === 'http' ? 'http' : 'harness'
+  cfg.extractor.useCurrentModel = cfg.extractor.useCurrentModel !== false
+  cfg.extractor.provider = String(cfg.extractor.provider || '').trim()
+  cfg.extractor.reasoningEffort = String(cfg.extractor.reasoningEffort || '').trim()
   cfg.extractor.baseUrl = String(cfg.extractor.baseUrl || '').replace(/\/+$/, '')
   cfg.extractor.path = String(cfg.extractor.path || '/chat/completions')
-  cfg.extractor.model = String(cfg.extractor.model || 'deepseek-chat')
+  // In http mode `model` is an OpenAI model name with a sensible default; in
+  // harness mode it is an id that must be taken literally, so a cleared field
+  // stays empty and `resolveRoute` can say what is missing.
+  cfg.extractor.model =
+    cfg.extractor.transport === 'http' ? String(cfg.extractor.model || 'deepseek-chat') : String(cfg.extractor.model || '')
   cfg.extractor.apiKeyEnv = String(cfg.extractor.apiKeyEnv || 'MEMORY_LLM_API_KEY')
 
   return cfg

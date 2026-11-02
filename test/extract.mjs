@@ -11,7 +11,7 @@ import path from 'node:path'
 import { resolveConfig } from '../src/config.js'
 import { createRedactor } from '../src/privacy.js'
 import { createVault } from '../src/vault.js'
-import { buildPrompt, callModel, distill, parseCards, readCredentialRef, resolveKeyInfo } from '../src/extract.js'
+import { buildPrompt, callModel, distill, parseCards, readCredentialRef, resolveKeyInfo, resolveRoute, selectionEffort } from '../src/extract.js'
 
 const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'memgraph-extract-'))
 const results = []
@@ -201,8 +201,14 @@ check('buildPrompt omits the existing block when there is nothing to show', () =
 const cfgFor = (overrides = {}) =>
   resolveConfig({
     vaultDir: dir,
-    extractor: { enabled: true, apiKey: 'sk-test', baseUrl: 'https://example.invalid/v1', model: 'stub-1', ...overrides },
+    // These cases stub `fetch`, so they exercise the HTTP transport; the harness
+    // transport is covered further down with a stub llm service.
+    extractor: { enabled: true, transport: 'http', apiKey: 'sk-test', baseUrl: 'https://example.invalid/v1', model: 'stub-1', ...overrides },
   })
+
+/** Config for the harness transport: no key and no endpoint, only a route. */
+const harnessCfg = (overrides = {}) =>
+  resolveConfig({ vaultDir: dir, extractor: { enabled: true, model: 'deepseek-chat', ...overrides } })
 
 await checkAsync('callModel returns content, usage and where the key came from', async () => {
   stubFetch(() => modelReply([draft]))
@@ -316,7 +322,7 @@ await checkAsync('distill writes an audit line naming the projects and the key s
 
 await checkAsync('distill dry run proposes without writing', async () => {
   const dryDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'memgraph-dry-'))
-  const dryCfg = resolveConfig({ vaultDir: dryDir, extractor: { enabled: true, apiKey: 'sk-test', baseUrl: 'https://example.invalid/v1' } })
+  const dryCfg = resolveConfig({ vaultDir: dryDir, extractor: { enabled: true, transport: 'http', apiKey: 'sk-test', baseUrl: 'https://example.invalid/v1' } })
   const dryVault = createVault(dryCfg, createRedactor(dryCfg.privacy))
   await dryVault.appendEpisode({ project: 'p', t: '2026-11-01T09:00:00+08:00', user: 'A thing.', assistant: 'Yes.' })
   stubFetch(() => modelReply([{ kind: 'fact', title: 'Proposed only', body: 'b' }]))
@@ -336,7 +342,7 @@ await checkAsync('distill refuses to run while the extractor is disabled', async
 
 await checkAsync('distill does not write a card whose body carries a secret through untouched', async () => {
   const secretDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'memgraph-secret-'))
-  const secretCfg = resolveConfig({ vaultDir: secretDir, extractor: { enabled: true, apiKey: 'sk-test', baseUrl: 'https://example.invalid/v1' } })
+  const secretCfg = resolveConfig({ vaultDir: secretDir, extractor: { enabled: true, transport: 'http', apiKey: 'sk-test', baseUrl: 'https://example.invalid/v1' } })
   const secretRedactor = createRedactor(secretCfg.privacy)
   const secretVault = createVault(secretCfg, secretRedactor)
   const secret = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789'
@@ -347,6 +353,179 @@ await checkAsync('distill does not write a card whose body carries a secret thro
   assert.ok(!card.body.includes(secret), card.body)
   assert.ok(card.body.includes('[REDACTED]'), card.body)
   await fsp.rm(secretDir, { recursive: true, force: true })
+})
+
+/* ------------------------------------------------ harness transport (llm) */
+
+/**
+ * A stand-in for the harness `llm` service: it records what the extractor
+ * proposed, applies the `configure` callback the way the real service does, and
+ * streams whatever chunks the case needs.
+ */
+function stubLlm({ chunks, delayMs = 0 } = {}) {
+  const seen = []
+  return {
+    seen,
+    llm: {
+      async prepareCall(config, signal, configure) {
+        const resolved = configure ? { ...config, ...configure(config, { reasoning: { efforts: [] } }) } : { ...config }
+        seen.push({ config: resolved, signal })
+        return {
+          config: resolved,
+          stream(options) {
+            seen.push({ options })
+            return (async function* () {
+              if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
+              for (const chunk of chunks ?? [
+                { type: 'text-delta', index: 0, text: '{"cards":[]}' },
+                { type: 'usage', usage: { totalTokens: 7 } },
+                { type: 'finish', reason: { kind: 'stop' } },
+              ]) {
+                yield chunk
+              }
+            })()
+          },
+        }
+      },
+    },
+  }
+}
+
+check('resolveRoute borrows the model selected in Settings', () => {
+  const route = resolveRoute(harnessCfg(), { provider: 'wb', model: 'deepseek-v4.1-flash' })
+  assert.equal(route.provider, 'wb')
+  assert.equal(route.model, 'deepseek-v4.1-flash')
+  assert.equal(route.effort, '')
+  assert.match(route.source, /Settings/)
+})
+
+check('resolveRoute keeps the thinking level of the selection', () => {
+  assert.equal(selectionEffort({ reasoningEffort: 'high' }), 'high')
+  assert.equal(selectionEffort({ reasoning: 'medium' }), 'medium')
+  assert.equal(selectionEffort({ reasoning: { id: 'low', name: 'Low' } }), 'low')
+  assert.equal(selectionEffort({}), '')
+  assert.equal(resolveRoute(harnessCfg(), { provider: 'p', model: 'm', reasoningEffort: 'low' }).effort, 'low')
+})
+
+check('an explicit reasoningEffort overrides the selection', () => {
+  const route = resolveRoute(harnessCfg({ reasoningEffort: 'high' }), { provider: 'p', model: 'm', reasoningEffort: 'low' })
+  assert.equal(route.effort, 'high')
+})
+
+check('resolveRoute prefers configured provider/model when useCurrentModel is off', () => {
+  const cfg = harnessCfg({ useCurrentModel: false, provider: 'deepseek', model: 'deepseek-chat' })
+  const route = resolveRoute(cfg, { provider: 'ignored', model: 'ignored' })
+  assert.deepEqual([route.provider, route.model], ['deepseek', 'deepseek-chat'])
+  assert.match(route.source, /config extractor\.provider/)
+})
+
+check('resolveRoute explains what is missing instead of guessing a route', () => {
+  assert.throws(
+    () => resolveRoute(harnessCfg({ useCurrentModel: false, provider: 'deepseek', model: '' }), { provider: 'p', model: 'm' }),
+    /both required/,
+  )
+  assert.throws(() => resolveRoute(harnessCfg(), undefined), /No model is selected in Settings/)
+})
+
+await checkAsync('the harness transport needs no key and names the route it used', async () => {
+  const { llm, seen } = stubLlm()
+  const result = await callModel(harnessCfg(), [{ role: 'system', content: 'S' }, { role: 'user', content: 'U' }], {
+    llm,
+    selection: { provider: 'wb', model: 'deepseek-v4.1-flash' },
+  })
+  assert.equal(result.content, '{"cards":[]}')
+  assert.equal(result.model, 'wb/deepseek-v4.1-flash')
+  assert.match(result.keySource, /Settings/)
+  assert.equal(seen[0].config.provider, 'wb')
+  assert.equal(seen[1].options.system, 'S')
+  assert.deepEqual(seen[1].options.messages, [{ role: 'user', content: [{ type: 'text', text: 'U' }] }])
+})
+
+await checkAsync('the harness transport passes a configured thinking level to the route', async () => {
+  const { llm, seen } = stubLlm()
+  await callModel(harnessCfg({ reasoningEffort: 'high' }), [{ role: 'user', content: 'U' }], {
+    llm,
+    selection: { provider: 'p', model: 'm' },
+  })
+  assert.equal(seen[0].config.reasoningEffort, 'high')
+})
+
+await checkAsync('the harness transport sends the output cap and leaves sampling to the route', async () => {
+  const { llm, seen } = stubLlm()
+  await callModel(harnessCfg({ maxOutputTokens: 4096 }), [{ role: 'user', content: 'U' }], {
+    llm,
+    selection: { provider: 'p', model: 'm' },
+  })
+  assert.equal(seen[0].config.maxTokens, 4096)
+  assert.equal('temperature' in seen[0].config, false, 'the borrowed route owns sampling')
+})
+
+await checkAsync('the harness transport reports a failed finish with its code', async () => {
+  const { llm } = stubLlm({
+    chunks: [{ type: 'finish', reason: { kind: 'error', failure: { code: 'RATE_LIMIT', message: 'slow down' } } }],
+  })
+  await assert.rejects(
+    () => callModel(harnessCfg(), [{ role: 'user', content: 'U' }], { llm, selection: { provider: 'p', model: 'm' } }),
+    /RATE_LIMIT.*slow down/s,
+  )
+})
+
+await checkAsync('the harness transport asks for a bigger cap when output is truncated', async () => {
+  const { llm } = stubLlm({ chunks: [{ type: 'text-delta', index: 0, text: '{"cards":[' }, { type: 'finish', reason: { kind: 'max-tokens' } }] })
+  await assert.rejects(
+    () => callModel(harnessCfg(), [{ role: 'user', content: 'U' }], { llm, selection: { provider: 'p', model: 'm' } }),
+    /maxOutputTokens/,
+  )
+})
+
+await checkAsync('the harness transport rejects an empty completion', async () => {
+  const { llm } = stubLlm({ chunks: [{ type: 'text-delta', index: 0, text: '   ' }, { type: 'finish', reason: { kind: 'stop' } }] })
+  await assert.rejects(
+    () => callModel(harnessCfg(), [{ role: 'user', content: 'U' }], { llm, selection: { provider: 'p', model: 'm' } }),
+    /empty completion/,
+  )
+})
+
+await checkAsync('a missing llm service points at the http transport instead of failing obscurely', async () => {
+  await assert.rejects(() => callModel(harnessCfg(), [{ role: 'user', content: 'U' }]), /no llm service.*"http"/s)
+})
+
+await checkAsync('the harness transport says who cancelled an aborted call', async () => {
+  const { llm } = stubLlm({ delayMs: 40, chunks: [{ type: 'finish', reason: { kind: 'aborted' } }] })
+  const abort = new AbortController()
+  setTimeout(() => abort.abort(), 5)
+  await assert.rejects(
+    () =>
+      callModel(harnessCfg(), [{ role: 'user', content: 'U' }], {
+        llm,
+        signal: abort.signal,
+        selection: { provider: 'p', model: 'm' },
+      }),
+    /p\/m was cancelled before the route answered/s,
+  )
+})
+
+await checkAsync('distill over the harness transport records the borrowed route as provenance', async () => {
+  const llmDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'memgraph-harness-'))
+  const llmCfg = resolveConfig({ vaultDir: llmDir, extractor: { enabled: true, model: 'deepseek-chat' } })
+  const llmRedactor = createRedactor(llmCfg.privacy)
+  const llmVault = createVault(llmCfg, llmRedactor)
+  await llmVault.appendEpisode({ project: 'p', t: '2026-11-01T09:00:00+08:00', user: 'Use the model from Settings.', assistant: 'OK.' })
+  const { llm } = stubLlm({
+    chunks: [
+      { type: 'text-delta', index: 0, text: JSON.stringify({ cards: [{ kind: 'preference', title: 'Borrow the Settings model', body: 'No key of its own.', entities: ['dsh'] }] }) },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ],
+  })
+  calls.length = 0
+  const report = await distill({ cfg: llmCfg, vault: llmVault, redactor: llmRedactor, llm, selection: { provider: 'wb', model: 'deepseek-v4.1-flash' } })
+  assert.equal(report.ok, true)
+  assert.equal(report.written, 1)
+  assert.equal(report.model, 'wb/deepseek-v4.1-flash')
+  const [card] = await llmVault.listCards({ includeRetracted: true })
+  assert.equal(card.source.model, 'wb/deepseek-v4.1-flash')
+  assert.equal(calls.length, 0, 'the harness transport must not touch fetch')
+  await fsp.rm(llmDir, { recursive: true, force: true })
 })
 
 globalThis.fetch = realFetch

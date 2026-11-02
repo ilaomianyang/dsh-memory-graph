@@ -7,7 +7,7 @@
  */
 import path from 'node:path'
 import { searchCards, timelineCards } from './search.js'
-import { distill } from './extract.js'
+import { distill, resolveRoute } from './extract.js'
 import { CARD_KINDS, CONFIDENCE, slugify } from './vault.js'
 
 const OUTPUT_SCHEMA = { type: 'object', additionalProperties: true }
@@ -47,6 +47,38 @@ function formatHits(hits) {
         .join('\n')
     })
     .join('\n\n')
+}
+
+/**
+ * The harness services the extractor borrows its route from. Both are optional:
+ * without them the extractor can still post to an endpoint itself, so their
+ * absence is a reason to report, never to fail the surrounding operation.
+ */
+function extractorServices(ctx) {
+  try {
+    const llm = ctx.get?.('llm', false) ?? undefined
+    const selection = ctx.get?.('agentDefaultModel', false)?.currentSelection?.() ?? undefined
+    return { llm, selection }
+  } catch {
+    return { llm: undefined, selection: undefined }
+  }
+}
+
+/** One line describing what a distill call would do right now, for memory_stats. */
+function describeExtractor(ctx, cfg) {
+  if (!cfg.extractor.enabled) return 'extractor: off (nothing calls a model)'
+  if (cfg.extractor.transport === 'http') {
+    return `extractor: http ${cfg.extractor.baseUrl}${cfg.extractor.path} model=${cfg.extractor.model}`
+  }
+  const { llm, selection } = extractorServices(ctx)
+  try {
+    const route = resolveRoute(cfg, selection)
+    const effort = route.effort === '' ? '' : ` effort=${route.effort}`
+    const model = `${route.provider}/${route.model}`
+    return `extractor: ${llm ? 'harness' : 'harness (no llm service!)'} ${model}${effort} · ${route.source}`
+  } catch (error) {
+    return `extractor: harness · ${error.message}`
+  }
 }
 
 export function registerTools(ctx, { cfg, vault, redactor }) {
@@ -427,7 +459,7 @@ export function registerTools(ctx, { cfg, vault, redactor }) {
     ctx.tools.register({
       name: 'memory_distill',
       description:
-        'Turn captured raw episodes into memory cards using the configured extractor model. Run it after a long work session, or when the user asks what you have learned lately. Needs extractor.enabled and an API key; returns a clear reason when it is not configured.',
+        'Turn captured raw episodes into memory cards using a model. By default it borrows the model selected in Settings → Models, so it needs no key of its own. Run it after a long work session, or when the user asks what you have learned lately. Returns a clear reason when it is not configured.',
       parameters: {
         type: 'object',
         properties: {
@@ -445,6 +477,7 @@ export function registerTools(ctx, { cfg, vault, redactor }) {
           project: args.project ?? projectFor(ctx, exec, cfg),
           dryRun: Boolean(args.dryRun),
           signal: exec?.signal,
+          ...extractorServices(ctx),
         })
         const lines = []
         if (!report.ok) lines.push(`Not distilled: ${report.reason}`)
@@ -455,6 +488,7 @@ export function registerTools(ctx, { cfg, vault, redactor }) {
             lines.push(`  ${card.id ?? '(proposed)'} · ${card.kind} · ${card.title}${card.deduped ? ' (re-confirmed)' : ''}`)
           }
           if (report.skipped) lines.push(`  skipped: ${report.skipped}`)
+          if (report.model) lines.push(`  model: ${report.model}${report.keySource ? ` · ${report.keySource}` : ''}`)
           if (report.usage) lines.push(`  tokens: ${JSON.stringify(report.usage)}`)
         }
         // Distillation is the biggest writer of all: without this the graph and
@@ -483,6 +517,7 @@ export function registerTools(ctx, { cfg, vault, redactor }) {
           `projects: ${stats.projects.join(', ') || '—'}`,
           `episodes: ${stats.episodes.records} records in ${stats.episodes.files} file(s)`,
           `last distill: ${stats.distill.lastRun ?? 'never'}`,
+          describeExtractor(ctx, cfg),
           `privacy rules: ${stats.privacy.rules}`,
           `views: README.md and graph.html in the vault root (open the HTML directly, no server needed)`,
         ].join('\n')

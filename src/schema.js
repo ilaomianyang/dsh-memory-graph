@@ -74,21 +74,52 @@ const extractor = z.object({
     .boolean()
     .default(false)
     .description('用模型把片段蒸馏成记忆卡 · distil episodes into cards with a model'),
+  transport: z
+    .union([z.const('harness'), z.const('http')])
+    .default('harness')
+    .description(
+      '从哪里取模型：harness = 复用设置里已经配好的模型和密钥；http = 自己填地址和密钥 · where the model comes from: harness borrows a route configured in Settings, http posts to your own endpoint',
+    ),
+  useCurrentModel: z
+    .boolean()
+    .default(true)
+    .description(
+      'harness 模式下跟随「设置 → 模型」当前选中的模型 · harness: use the model currently selected in Settings → Models',
+    ),
+  provider: z
+    .string()
+    .default('')
+    .description(
+      'harness 模式下的 provider（如 deepseek、wb、agy-local）；只有关掉 useCurrentModel 才需要 · harness provider id, only when useCurrentModel is off',
+    ),
+  reasoningEffort: z
+    .string()
+    .default('')
+    .description(
+      '思考强度（如 low/medium/high，取决于模型）；留空跟随该模型的默认 · thinking level for distillation; empty keeps the route default',
+    ),
   baseUrl: z
     .string()
     .default('https://api.deepseek.com/v1')
-    .description('OpenAI 兼容接口地址 · OpenAI-compatible base URL'),
-  path: z.string().default('/chat/completions').description('补全路径 · completion path'),
-  model: z.string().default('deepseek-chat').description('模型名 · model name'),
+    .description('仅 http 模式：OpenAI 兼容接口地址 · http transport only: OpenAI-compatible base URL'),
+  path: z.string().default('/chat/completions').description('仅 http 模式：补全路径 · http transport only: completion path'),
+  model: z
+    .string()
+    .default('deepseek-chat')
+    .description('模型名（http 模式必填；harness 模式在关掉 useCurrentModel 后使用）· model name'),
   apiKeyEnv: z
     .string()
     .default('MEMORY_LLM_API_KEY')
-    .description('放密钥的环境变量或 ~/.dsh/.credentials.yaml 里的 ref 名 · env var or credentials ref holding the key'),
+    .description(
+      '仅 http 模式：放密钥的环境变量或 ~/.dsh/.credentials.yaml 里的 ref 名 · http transport only: env var or credentials ref holding the key',
+    ),
   apiKey: z
     .string()
     .role('secret')
     .default('')
-    .description('直接写密钥（不建议，会存进 profile 配置）· inline key (not recommended: lands in the profile config)'),
+    .description(
+      '仅 http 模式：直接写密钥（不建议，会存进 profile 配置）· http transport only: inline key (not recommended)',
+    ),
   maxOutputTokens: z
     .number()
     .min(256)
@@ -96,7 +127,13 @@ const extractor = z.object({
     .step(1)
     .default(3000)
     .description('单次蒸馏输出上限 · output token cap per run'),
-  temperature: z.number().min(0).max(2).step(0.05).default(0.1).description('采样温度 · sampling temperature'),
+  temperature: z
+    .number()
+    .min(0)
+    .max(2)
+    .step(0.05)
+    .default(0.1)
+    .description('仅 http 模式：采样温度（harness 模式沿用模型设置）· http transport only: sampling temperature'),
   timeoutMs: z
     .number()
     .min(5000)

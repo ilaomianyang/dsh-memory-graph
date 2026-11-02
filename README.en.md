@@ -111,9 +111,7 @@ Two ways, same result — use either:
       denyPatterns: ['my-internal-domain\\.corp']
     extractor:
       enabled: true
-      baseUrl: 'https://api.deepseek.com/v1'
-      model: 'deepseek-chat'
-      apiKeyEnv: 'MEMORY_LLM_API_KEY'   # read from the environment, never stored
+      transport: 'harness'      # default: reuse the model selected in Settings, no key of its own
       maxEpisodesPerRun: 40
     retrieval:
       limit: 8
@@ -129,17 +127,36 @@ Two ways, same result — use either:
 | `privacy.useDefaultPatterns` | `true` | built-in key / private-key / token rules |
 | `privacy.denyPatterns` | `[]` | your own regexes, `(?i)` prefix supported |
 | `extractor.enabled` | `false` | when off, nothing is captured *and* no model is ever called |
-| `extractor.baseUrl` | `https://api.deepseek.com/v1` | any OpenAI-compatible endpoint (own gateway, another vendor) |
-| `extractor.model` | `deepseek-chat` | the model used for distillation |
-| `extractor.apiKeyEnv` | `MEMORY_LLM_API_KEY` | the key is looked up under this name |
+| `extractor.transport` | `harness` | `harness` = borrow the model from Settings; `http` = fill in your own endpoint |
+| `extractor.useCurrentModel` | `true` | harness mode: follow the model currently selected |
+| `extractor.provider` | `''` | harness mode: provider id, used when "follow" is off |
+| `extractor.reasoningEffort` | `''` | harness mode: thinking level, empty = whatever Settings has |
+| `extractor.baseUrl` | `https://api.deepseek.com/v1` | http mode: any OpenAI-compatible endpoint |
+| `extractor.path` | `/chat/completions` | http mode: the path |
+| `extractor.model` | `deepseek-chat` | http mode: the model id |
+| `extractor.apiKeyEnv` | `MEMORY_LLM_API_KEY` | http mode: the key is looked up under this name |
+| `extractor.temperature` | `0.1` | http mode only: in harness mode sampling belongs to the borrowed route |
 | `extractor.maxEpisodesPerRun` | `40` | how many episodes one distillation may feed in |
 | `retrieval.hops` | `1` | entity expansion depth, `0` = keyword only |
 
-The extractor is **separate from your chat model**: its own endpoint, its own model, its own budget.
+### Two ways to hook up the extractor
+
+**A. Borrow the model from Settings (the default)**
+
+With `transport: 'harness'` the plugin touches no key and no endpoint: it asks the harness `llm` service for one call and gets exactly what you selected in **Settings → Models** — provider, model, and thinking level. The key is already configured there, so the plugin never needs a second one.
+
+- Want a different extraction model? Change it in Settings; the next distillation follows.
+- Want to pin a cheap small model to extraction? Turn `useCurrentModel` off and fill in `provider` + `model` (e.g. `deepseek` / `deepseek-chat`); the key still comes from Settings.
+- Want a cheaper or stronger thinking level? Set `reasoningEffort` to one of the ids that model offers in Settings (e.g. `high`); leave it empty to reuse your selection.
+- No secret can leak on this route: the plugin reports only the provider / model / effort it used, never a credential value.
+
+**B. Your own endpoint (`http`)**
+
+The extractor is fully independent: its own endpoint, model, and budget. Use it when extraction should run on a model configured elsewhere, behind your own gateway, or when this harness build exposes no `llm` service.
 
 The Settings form also has an `extractor.apiKey` field, but **do not use it**: whatever you type there is written in plaintext into the profile config. Pointing `apiKeyEnv` at a name and keeping the value in the environment or `~/.dsh/.credentials.yaml` is the intended route.
 
-### Where the key comes from
+### Where the key comes from (http mode)
 
 Tried in this order; whichever answers is used, and the value is never logged, never audited, never written into the vault:
 
@@ -147,7 +164,7 @@ Tried in this order; whichever answers is used, and the value is never logged, n
 2. the process environment variable named by `extractor.apiKeyEnv`
 3. **the harness's own credential store**: `refs.<apiKeyEnv>` in `~/.dsh/.credentials.yaml`
 
-Point 3 means that if the key is already configured for the harness (`DEEPSEEK_API_KEY`, say), you just set `apiKeyEnv` to the same name instead of exporting anything. Reading the store parses the `refs:` block only and touches nothing else. `memory_distill` reports *which* source it used, never the value.
+Point 3 means that if the key is already configured for the harness (`DEEPSEEK_API_KEY`, say), you just set `apiKeyEnv` to the same name instead of exporting anything. Reading the store parses the `refs:` block only and touches nothing else. `memory_stats` prints an `extractor:` line naming the route and model it would use — never the value.
 
 ## Tools
 
@@ -232,7 +249,7 @@ npm run eval    # retrieval eval only (offline, deterministic)
 - `test/smoke.mjs` — storage, redaction, BM25 retrieval, entity expansion, supersede chain, extractor parsing
 - `test/capture.mjs` — drives the capture listener with real `session/event` shapes, including injected context
 - `test/tools.mjs` — runs `execute` + `render` for all eight tools
-- `test/extract.mjs` — the extractor with `fetch` stubbed: prompt construction, key resolution order, tolerant JSON parsing, per-card project attribution, cursor advance, dry run writing nothing, secrets stopped before the write
+- `test/extract.mjs` — the extractor: `fetch` stubbed for the http route (prompt construction, key resolution order, tolerant JSON parsing, per-card project attribution, cursor advance, dry run writing nothing, secrets stopped before the write), then a fake `llm` service for the harness route (borrows the Settings model and thinking level, honours an explicit override, explains a missing selection, handles every terminal `finish`, rejects an empty completion, and never touches `fetch`)
 
 Two suites do touch the network (and cost money), so they are not in `npm test`:
 
@@ -283,6 +300,7 @@ One deliberate asymmetry: **asking about the past gets its own path**. "Is the e
 
 - Retrieval is BM25 plus entity expansion — **no vector recall**. Chinese uses bigram tokenization, which works but trails embeddings; swap it out once you pass a few thousand cards.
 - Distillation quality depends on the extractor model and **only happens when you call it**. Pair it with a scheduled task.
+- Harness mode borrows "whatever model is currently selected in Settings", so switching models mid-conversation also switches the extractor; turn `useCurrentModel` off to pin one. It spends that provider's quota — being a plugin does not make the calls free.
 - The graph view is a **static HTML file** (`graph.html`), not a panel inside the DSH Web GUI; a panel would be a separate client plugin.
 - Deduplication only matches "same project + same normalized title". Paraphrases become two cards.
 - The Settings form is the generic schemastery form: fields have bilingual descriptions, but there are **no section headings and no custom widgets**, and array-valued keys such as `skipPatterns` / `denyPatterns` are edited one line at a time. A nicer configuration UI would be a client-side panel of its own.

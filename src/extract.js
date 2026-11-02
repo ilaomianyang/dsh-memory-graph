@@ -208,7 +208,152 @@ function resolveKey(cfg) {
   return resolveKeyInfo(cfg).key
 }
 
-export async function callModel(cfg, messages, { signal } = {}) {
+/**
+ * The thinking level of a Settings model selection. The harness stores it as
+ * `reasoningEffort` (an opaque id); older shapes nested it under `reasoning` as
+ * a string or `{id, name}` record, so all three are accepted.
+ */
+export function selectionEffort(selection) {
+  const direct = selection?.reasoningEffort
+  if (typeof direct === 'string') return direct
+  const value = selection?.reasoning
+  if (typeof value === 'string') return value
+  if (value && typeof value === 'object' && typeof value.id === 'string') return value.id
+  return ''
+}
+
+/**
+ * The route one harness-transport call takes: the provider/model pair chosen in
+ * this plugin's settings, or the model currently selected in Settings → Models.
+ * Reusing that selection is the whole point of the harness transport: the route,
+ * its key and its base URL already exist, so the extractor holds no secret.
+ * @returns {{provider: string, model: string, effort: string, source: string}}
+ */
+export function resolveRoute(cfg, selection) {
+  const { useCurrentModel, provider, model, reasoningEffort } = cfg.extractor
+  if (!useCurrentModel) {
+    if (!provider || !model) {
+      throw new Error(
+        'extractor.useCurrentModel is off, so extractor.provider and extractor.model are both required.',
+      )
+    }
+    return { provider, model, effort: reasoningEffort, source: 'config extractor.provider/model' }
+  }
+  if (!selection?.provider || !selection?.model) {
+    throw new Error(
+      'No model is selected in Settings → Models, so the extractor has no route to borrow. ' +
+        'Pick a model there, or set extractor.provider and extractor.model and turn extractor.useCurrentModel off.',
+    )
+  }
+  return {
+    provider: selection.provider,
+    model: selection.model,
+    // An explicit setting wins, so a big thinking budget can be reserved for
+    // distillation without changing the model the conversation itself uses.
+    effort: reasoningEffort || selectionEffort(selection),
+    source: 'Settings → Models selection',
+  }
+}
+
+/** Split OpenAI-shaped messages into the harness's system prompt plus one user input. */
+function splitMessages(messages) {
+  const join = (list) => list.map((message) => message.content).join('\n\n')
+  return {
+    system: join(messages.filter((message) => message.role === 'system')),
+    input: join(messages.filter((message) => message.role !== 'system')),
+  }
+}
+
+/**
+ * Call a route the Settings page already owns, through the harness LLM service.
+ *
+ * The service resolves the adapter, the base URL and the credential, so a
+ * custom provider added in Settings works here with no configuration at all, and
+ * the key never passes through this plugin.
+ */
+async function callHarnessModel(cfg, messages, { signal, llm, selection } = {}) {
+  if (!llm || typeof llm.prepareCall !== 'function') {
+    throw new Error(
+      'This harness build exposes no llm service to plugins, so set extractor.transport = "http" to post to an endpoint directly.',
+    )
+  }
+  const route = resolveRoute(cfg, selection)
+  const { system, input } = splitMessages(messages)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), cfg.extractor.timeoutMs)
+  const onAbort = () => controller.abort()
+  signal?.addEventListener?.('abort', onAbort, { once: true })
+
+  try {
+    const { effort } = route
+    // Sampling is left alone: the borrowed route owns it, and some providers
+    // reject an explicit temperature when they are in a thinking mode.
+    const controls = {
+      maxTokens: cfg.extractor.maxOutputTokens,
+      ...(effort === '' ? {} : { reasoningEffort: effort }),
+    }
+    // prepareCall validates the controls against this exact route before any
+    // I/O, so an effort the route does not offer fails here with its own error
+    // instead of halfway through a paid call.
+    const call = await llm.prepareCall(
+      { provider: route.provider, model: route.model, ...controls },
+      controller.signal,
+      (proposed) => ({ ...proposed, ...controls }),
+    )
+    const options = {
+      ...call.config,
+      messages: [{ role: 'user', content: [{ type: 'text', text: input }] }],
+      system,
+      signal: controller.signal,
+    }
+    let text = ''
+    let usage = null
+    let finish = null
+    for await (const chunk of call.stream(options)) {
+      if (chunk?.type === 'text-delta') text += chunk.text
+      else if (chunk?.type === 'usage') usage = chunk.usage ?? null
+      else if (chunk?.type === 'finish') finish = chunk.reason ?? null
+    }
+    const kind = finish?.kind
+    if (kind === 'error' || kind === 'aborted') {
+      const failure = finish.failure ?? {}
+      if (controller.signal.aborted) {
+        // Either the caller cancelled us or our own timer fired; say which,
+        // because the fix is different (wait longer vs. run less work).
+        const why = signal?.aborted
+          ? 'was cancelled before the route answered'
+          : `timed out after ${cfg.extractor.timeoutMs} ms`
+        throw new Error(
+          `Extractor call to ${route.provider}/${route.model} ${why}; raise extractor.timeoutMs or distill fewer episodes per run.`,
+        )
+      }
+      throw new Error(
+        `Extractor call failed on ${route.provider}/${route.model} (${failure.code ?? kind}): ${failure.message ?? 'the route ended the stream without a reason'}`,
+      )
+    }
+    if (kind === 'tool-calls') {
+      throw new Error('Extractor answered with a tool call instead of JSON. Try a different model for distillation.')
+    }
+    if (kind === 'max-tokens') {
+      throw new Error(
+        `Extractor output reached maxOutputTokens (${cfg.extractor.maxOutputTokens}); raise it or distill fewer episodes per run.`,
+      )
+    }
+    if (text.trim() === '') throw new Error('Extractor returned an empty completion.')
+    return {
+      content: text,
+      usage,
+      model: `${route.provider}/${route.model}`,
+      keySource: `${route.source}${effort === '' ? '' : ` · effort ${effort}`}`,
+    }
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener?.('abort', onAbort)
+  }
+}
+
+/** Post to an OpenAI-compatible endpoint with this plugin's own key. */
+export async function callHttpModel(cfg, messages, { signal } = {}) {
   const { key, source, looked } = resolveKeyInfo(cfg)
   if (key === '') {
     const where = looked.length > 0 ? looked.join(' or ') : 'config extractor.apiKey'
@@ -263,6 +408,20 @@ export async function callModel(cfg, messages, { signal } = {}) {
 }
 
 /**
+ * One model call for distillation, over the configured transport.
+ * @param {object} cfg resolved plugin config
+ * @param {Array<{role: string, content: string}>} messages prompt built by {@link buildPrompt}
+ * @param {{signal?: AbortSignal, llm?: object, selection?: object}} options harness
+ *   service handle and the current Settings model selection, both used by the
+ *   harness transport and ignored by the HTTP one
+ */
+export async function callModel(cfg, messages, { signal, llm, selection } = {}) {
+  return cfg.extractor.transport === 'http'
+    ? callHttpModel(cfg, messages, { signal })
+    : callHarnessModel(cfg, messages, { signal, llm, selection })
+}
+
+/**
  * The project a batch belongs to when a card does not say: the most frequent
  * project among the episodes, with the most recent one winning a tie.
  */
@@ -287,11 +446,12 @@ function dominantProject(entries) {
  * Read undistilled episodes, extract cards, persist them.
  * @returns {Promise<object>} a report the tool renders verbatim
  */
-export async function distill({ cfg, vault, redactor, project, dryRun = false, signal }) {
+export async function distill({ cfg, vault, redactor, project, dryRun = false, signal, llm, selection }) {
   if (!cfg.extractor.enabled) {
     return {
       ok: false,
-      reason: 'Extractor is disabled. Set config extractor.enabled = true and point extractor at an OpenAI-compatible endpoint.',
+      reason:
+        'Extractor is disabled. Set config extractor.enabled = true; the default transport reuses the model selected in Settings → Models.',
     }
   }
 
@@ -309,7 +469,7 @@ export async function distill({ cfg, vault, redactor, project, dryRun = false, s
   const dominant = dominantProject(entries) || cfg.defaultProject
   const scopedProject = project || (batchProjects.length === 1 ? batchProjects[0] : dominant)
   const messages = buildPrompt(entries, cards, scopedProject)
-  const { content, usage, keySource } = await callModel(cfg, messages, { signal })
+  const { content, usage, model: usedModel, keySource } = await callModel(cfg, messages, { signal, llm, selection })
   const { cards: parsed, skipped, raw } = parseCards(content)
 
   if (dryRun) {
@@ -321,6 +481,7 @@ export async function distill({ cfg, vault, redactor, project, dryRun = false, s
       proposed: parsed,
       skipped,
       usage,
+      model: usedModel,
       keySource,
       raw: parsed.length === 0 ? raw : undefined,
     }
@@ -343,7 +504,7 @@ export async function distill({ cfg, vault, redactor, project, dryRun = false, s
       source: {
         kind: 'distill',
         episodes: entries.map((entry) => `${entry.file}#${entry.line}`).slice(0, 50),
-        model: cfg.extractor.model,
+        model: usedModel,
       },
     })
     written.push({
@@ -361,7 +522,7 @@ export async function distill({ cfg, vault, redactor, project, dryRun = false, s
   await vault.regenerateGraph?.()
   await vault.audit(
     'distill',
-    `projects=${batchProjects.join(',') || scopedProject} episodes=${entries.length} cards=${written.length} model=${cfg.extractor.model} key=${keySource}`,
+    `projects=${batchProjects.join(',') || scopedProject} episodes=${entries.length} cards=${written.length} model=${usedModel} via=${cfg.extractor.transport} route=${keySource}`,
   )
 
   return {
@@ -372,6 +533,7 @@ export async function distill({ cfg, vault, redactor, project, dryRun = false, s
     projects: [...new Set(written.map((card) => card.project))],
     skipped,
     usage,
+    model: usedModel,
     keySource,
     vault: cfg.vaultDir,
   }

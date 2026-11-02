@@ -7,3 +7,7 @@
           enabled: true
         extractor:
           enabled: false
+          # harness = borrow the provider / model / thinking level selected in
+          # Settings → Models (no key needed). Switch to 'http' to post to your
+          # own OpenAI-compatible endpoint with baseUrl + apiKeyEnv instead.
+          transport: 'harness'
