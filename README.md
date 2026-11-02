@@ -4,7 +4,7 @@
 
 给 DeepSeek Harness 的**长期联想记忆**插件。上下文压缩会把东西真的抹掉；这个插件在上下文之外留一层持久的、可读的、属于你自己的记忆。
 
-零依赖，纯 Node ESM，不需要构建。
+纯 Node ESM，不需要构建。唯一的运行依赖是 Harness 自带的 `@deepseek-ai/schemastery`——设置表单就是它渲染出来的；没装这个依赖时插件照常跑，只是没有表单。
 
 ---
 
@@ -62,7 +62,9 @@ SQLite 需要处理锁和二进制合并，纯文本可以直接读、直接 gre
 plugin_manager action=install_bundle target="<本仓库绝对路径>"
 ```
 
-装完默认 `vaultDir` 是 `~/dsh-memory`，插件激活时会自动建目录和空文件。安装结果是热生效的，但**改完插件源码后需要重启 Harness** 才会加载新的 JavaScript 模块代。
+`install_bundle` 用 `link:` 方式装本地目录，**不会**替你装依赖，所以先在这个仓库里跑一次 `npm install`（只有一个包）。不装也能用，只是设置里看不到表单。
+
+装完默认 `vaultDir` 是 `~/dsh-memory`，插件激活时会自动建目录和空文件。安装结果是热生效的，但**改完插件源码后需要重启 Harness** 才会加载新的 JavaScript 模块代——包括这次新增的 `Config` schema。
 
 卸载：`plugin_manager action=remove_bundle target="@local/dsh-memory-graph"`。**记忆库不会被删**，它在 `~/dsh-memory`，独立于插件。
 
@@ -86,7 +88,10 @@ plugin_manager action=install_bundle target="<本仓库绝对路径>"
 
 ## 配置
 
-在 profile 的 `cordis.patch.yml` 里覆盖：
+两种写法，效果完全一样，改哪一个都行：
+
+1. **设置界面**：DSH 的 Settings → 插件 → memory-graph。表单里的每一项都带中英文说明，改了即时生效。
+2. **profile 的 `cordis.patch.yml`**：适合写进版本库、或者用变量拼出配置。
 
 ```yaml
 - id: memory-graph
@@ -127,6 +132,8 @@ plugin_manager action=install_bundle target="<本仓库绝对路径>"
 | `retrieval.hops` | `1` | 联想扩散跳数，0 = 只做关键词 |
 
 **抽取器是独立的**，用自己的 endpoint 和模型，不占用对话模型的额度。
+
+设置表单里也有 `extractor.apiKey` 一栏，但你**最好别用它**：表单里填的值会明文落进 profile 的配置里。用 `apiKeyEnv` 指个名字、把值放进环境变量或 `~/.dsh/.credentials.yaml`，是这个插件设计上的默认路线。
 
 ### key 从哪来
 
@@ -274,7 +281,7 @@ npm run eval
 - 蒸馏质量取决于抽取模型，且**只在你显式调用时发生**，不会自己跑。建议配合定时任务。
 - 图视图是**静态 HTML**（`graph.html`），不是 DSH Web GUI 里的面板；要面板得单独写 client 插件。
 - 卡片去重只按"同项目 + 标题归一化相同"，措辞不同的近义卡片会被存成两张。
-- 没有导出 `Config` schema，所以 Settings 里没有可视化表单；配置走 `cordis.patch.yml`。这是为了让插件保持真正的零依赖（不引用 `@deepseek-ai/schemastery`），代价是配置得写 YAML。
+- 设置表单是 schemastery 生成的通用表单：字段有中英文说明，但**没有分组标题、没有自定义控件**，`skipPatterns` / `denyPatterns` 这种数组只能一行一条地编辑。要更好看的配置界面得自己写 client 侧的面板。
 - 采集粒度是一轮（`turn/end` 触发落盘），不是一条一条消息；一轮里的多次工具调用只记次数不记内容。连续多步的长轮次只留前 6 段可见文本。
 - 记忆库自带 `.gitignore`（忽略 `*.tmp`、系统垃圾文件和 `.distill-state.json`）；后者是每台机器各自的蒸馏游标，同步到另一台机器会重新蒸馏一遍，靠标题去重兜底。
 

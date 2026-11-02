@@ -1,8 +1,8 @@
 {
   "name": "@local/dsh-memory-graph",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
-  "description": "Long-term associative memory for DeepSeek Harness: a local plain-text vault of raw episodes, typed memory cards and entity pages. Zero dependencies, no build step.",
+  "description": "Long-term associative memory for DeepSeek Harness: a local plain-text vault of raw episodes, typed memory cards and entity pages. No build step; the only dependency is the harness's own schema library, used for the Settings form.",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -51,5 +51,8 @@
   "publishConfig": {
     "access": "public"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.5"
+  }
 }

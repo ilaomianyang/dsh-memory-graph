@@ -1,9 +1,10 @@
 /**
  * Config defaults and normalisation.
  *
- * The plugin deliberately exports no `Config` schema: it stays dependency-free
- * (no schemastery/zod resolution needed), so the row's `config` object is
- * validated here at activation and every field has a working default.
+ * The Settings form is drawn from the schema in `src/schema.js`, but that form
+ * is a convenience, not the contract: every field is normalised here again, so a
+ * config written by hand in `cordis.patch.yml`, or one carrying a stale key from
+ * an older version, still resolves to a usable configuration.
  */
 import os from 'node:os'
 import path from 'node:path'

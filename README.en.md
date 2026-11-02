@@ -6,7 +6,7 @@ Long-term **associative memory** for [DeepSeek Harness](https://getartcraft.com)
 
 Context compaction quietly deletes things. This plugin keeps a second layer — outside the context window, on your own disk, readable by you — so that a decision you made three months ago can still be found.
 
-Zero dependencies. Plain Node ESM. No build step.
+Plain Node ESM, no build step. The only third-party dependency is the harness's own `@deepseek-ai/schemastery`, which renders the Settings form; without it the plugin runs on defaults and simply has no form.
 
 ---
 
@@ -62,9 +62,11 @@ backed up directly.
 plugin_manager action=install_bundle target="<absolute path to this repo>"
 ```
 
+`install_bundle` links a local directory with `link:`, which does **not** install the package's dependencies, so run `npm install` once in this repo (it is a single package). Without it the plugin still runs — there is simply no Settings form.
+
 The vault defaults to `~/dsh-memory` and is created on activation.
 
-Installation is hot, but **changing this plugin's source requires restarting Harness** to load a fresh module generation.
+Installation is hot, but **changing this plugin's source requires restarting Harness** to load a fresh module generation — including the `Config` schema added for the Settings form.
 
 Uninstall with `plugin_manager action=remove_bundle target="@local/dsh-memory-graph"`. The vault is not touched — it lives in `~/dsh-memory`, independent of the plugin.
 
@@ -90,7 +92,10 @@ One file is one memory. Append-only. No binaries, no lockfiles. Run `git init` i
 
 ## Configuration
 
-Override the row in your profile's `cordis.patch.yml`:
+Two ways, same result — use either:
+
+1. **The Settings UI**: Settings → Plugins → memory-graph. Every field carries a bilingual description and applies immediately.
+2. **Your profile's `cordis.patch.yml`**: better when the config belongs in version control or is built from variables.
 
 ```yaml
 - id: memory-graph
@@ -131,6 +136,8 @@ Override the row in your profile's `cordis.patch.yml`:
 | `retrieval.hops` | `1` | entity expansion depth, `0` = keyword only |
 
 The extractor is **separate from your chat model**: its own endpoint, its own model, its own budget.
+
+The Settings form also has an `extractor.apiKey` field, but **do not use it**: whatever you type there is written in plaintext into the profile config. Pointing `apiKeyEnv` at a name and keeping the value in the environment or `~/.dsh/.credentials.yaml` is the intended route.
 
 ### Where the key comes from
 
@@ -278,7 +285,7 @@ One deliberate asymmetry: **asking about the past gets its own path**. "Is the e
 - Distillation quality depends on the extractor model and **only happens when you call it**. Pair it with a scheduled task.
 - The graph view is a **static HTML file** (`graph.html`), not a panel inside the DSH Web GUI; a panel would be a separate client plugin.
 - Deduplication only matches "same project + same normalized title". Paraphrases become two cards.
-- No `Config` schema is exported, so there is no Settings form; configure via `cordis.patch.yml`. That keeps the plugin truly dependency-free at the cost of writing YAML.
+- The Settings form is the generic schemastery form: fields have bilingual descriptions, but there are **no section headings and no custom widgets**, and array-valued keys such as `skipPatterns` / `denyPatterns` are edited one line at a time. A nicer configuration UI would be a client-side panel of its own.
 - Capture granularity is one turn (flushed on `turn/end`), not one message; tool calls inside a turn are counted, not recorded. A long multi-step turn keeps the first six visible text blocks.
 - The vault writes its own `.gitignore` (ignoring `*.tmp`, OS junk and `.distill-state.json`); the last one is a per-machine distillation cursor, so a synced vault re-distills once on the other machine and relies on title dedup.
 

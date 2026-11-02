@@ -19,6 +19,23 @@ import { registerCapture } from './src/capture.js'
 export const name = 'memory-graph'
 export const inject = ['tools']
 
+/**
+ * Settings-form schema.
+ *
+ * The harness draws a plugin's Settings form from the schema it exports, and it
+ * builds that schema with its own schemastery. So this one import is the only
+ * dependency the plugin has; it is loaded opportunistically so a checkout that
+ * never ran `npm install` still works — it just has no form and runs on the
+ * defaults in `src/config.js`.
+ */
+let Config
+try {
+  ;({ Config } = await import('./src/schema.js'))
+} catch {
+  Config = undefined
+}
+export { Config }
+
 export function apply(ctx, config) {
   const cfg = resolveConfig(config)
   if (!cfg.enabled) return

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0 — 2026-11-02
+
+设置界面：插件第一次有了可视化配置。
+
+**Added**
+
+- `Config` schema（`src/schema.js`）：DSH 的 Settings 表单是照着插件导出的 schema 画的，之前没导出，所以设置里根本没有这一行。现在 20 个字段全部带中英文说明，包括 `vaultDir`、`capture.*`、`privacy.*`、`extractor.*`、`retrieval.*`；每一格都有默认值，空的 `config:` 依然合法。
+- `extractor.apiKey` 标了 `role('secret')`，同时在 README 里明说**不要用它**——表单里填的密钥会明文落进 profile 配置，`apiKeyEnv` 指向凭据库才是设计上的路线。
+
+**Changed**
+
+- 插件不再是"零依赖"：`index.js` 会试着加载 `@deepseek-ai/schemastery`（Harness 自带的那个，也是所有官方插件用的那个），加载不到就退化成"没有表单、跑默认值"，插件本身照样起来。所以**裸仓库 + `link:` 安装需要先 `npm install` 一次**，README 的安装步骤已加这一句。
+- `package.json` 的 `description` 同步改口径（原文写着 "Zero dependencies"）。
+
 ## 0.2.0 — 2026-11-02
 
 记忆图视图、离线评测，以及「问的是过去还是现在」这条通路。
