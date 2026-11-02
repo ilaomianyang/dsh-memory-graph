@@ -635,22 +635,22 @@ export function createVault(cfg, redactor) {
     }
 
     const lines = []
-    lines.push('# Memory vault')
+    lines.push('# Memory vault · 记忆库')
     lines.push('')
-    lines.push('Plain-text long-term memory written by the **dsh-memory-graph** plugin.')
-    lines.push('Read it, grep it, edit it, delete it — it is yours.')
+    lines.push('`dsh-memory-graph` 写入的纯文本长期记忆。读它、grep 它、改它、删它——它是你的。')
+    lines.push('Plain-text long-term memory written by the **dsh-memory-graph** plugin — read it, grep it, edit it, delete it.')
     lines.push('')
-    lines.push(`- cards: **${cards.length}** · entities: **${entities.length}** · projects: **${projects.length}**`)
-    lines.push(`- last updated: ${nowIso()}`)
+    lines.push(`- 卡片 cards: **${cards.length}** · 实体 entities: **${entities.length}** · 项目 projects: **${projects.length}**`)
+    lines.push(`- 最后更新 last updated: ${nowIso()}`)
     lines.push('')
-    lines.push('## Layers')
+    lines.push('## 分层 · Layers')
     lines.push('')
-    lines.push('| layer | path | what it is |')
+    lines.push('| 层 layer | 路径 path | 是什么 · what it is |')
     lines.push('| --- | --- | --- |')
-    lines.push('| raw | `episodes/` | append-only record of each turn, never edited |')
-    lines.push('| semantic | `cards/` | typed, dated memories distilled from episodes |')
-    lines.push('| index | `entities/` | one page per thing, with a mention timeline |')
-    lines.push('| trace | `audit/` | every write, retraction and extraction run |')
+    lines.push('| raw | `episodes/` | 每轮一条，只追加不修改 · one line per turn, append-only |')
+    lines.push('| semantic | `cards/` | 从情节蒸馏出的带类型和日期的记忆 · typed, dated memories distilled from episodes |')
+    lines.push('| index | `entities/` | 每样东西一页，附提及时间线 · one page per thing, with a mention timeline |')
+    lines.push('| trace | `audit/` | 每次写入、撤回、蒸馏的记录 · every write, retraction and extraction run |')
     lines.push('')
 
     for (const [project, list] of [...byProject.entries()].sort()) {
@@ -667,7 +667,7 @@ export function createVault(cfg, redactor) {
     }
 
     if (entities.length > 0) {
-      lines.push('## Entities')
+      lines.push('## 实体 · Entities')
       lines.push('')
       lines.push(
         entities

@@ -235,6 +235,7 @@ await vault.regenerateReadme()
 const readme = await fsp.readFile(path.join(dir, 'README.md'), 'utf8')
 check('README is generated and links cards', () => {
   assert.ok(readme.includes('# Memory vault'), readme.slice(0, 120))
+  assert.ok(readme.includes('记忆库'), 'the vault index should be readable in Chinese too')
   assert.ok(readme.includes(storage.id), 'readme should link cards')
   assert.ok(readme.includes('## memory-graph'))
 })
