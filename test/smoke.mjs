@@ -219,6 +219,17 @@ check('prompt carries the transcript and existing ids', () => {
   assert.ok(prompt[1].content.includes(storage.id), 'existing ids should be offered for supersedes')
 })
 
+/* ------------------------------------------------------------------ config */
+check('a broken skip pattern is dropped instead of disabling capture', () => {
+  const bad = resolveConfig({ capture: { skipPatterns: ['^Real prompt', '[unclosed'] } })
+  assert.deepEqual(bad.capture.skipPatterns, ['^Real prompt'])
+})
+check('injection defaults are present out of the box', () => {
+  const plain = resolveConfig({})
+  assert.equal(plain.capture.skipPatterns.some((p) => p.includes('checkpoint')), true)
+  assert.equal(plain.capture.skipPatterns.some((p) => p.includes('system-reminder')), true)
+})
+
 /* ------------------------------------------------------------------ readme + stats */
 await vault.regenerateReadme()
 const readme = await fsp.readFile(path.join(dir, 'README.md'), 'utf8')
@@ -234,6 +245,11 @@ check('stats count accurately', () => {
   assert.ok(stats.entities >= 4)
   assert.ok(stats.projects.includes('memory-graph'))
   assert.equal(stats.episodes.records, 2)
+})
+
+const gitignore = await fsp.readFile(path.join(dir, '.gitignore'), 'utf8')
+check('the vault carries a .gitignore for its own repo', () => {
+  assert.ok(gitignore.includes('.distill-state.json'), gitignore)
 })
 
 /* ------------------------------------------------------------------ forget */

@@ -37,6 +37,7 @@ export function apply(ctx, config) {
   ctx.effect(() => {
     vault
       .ensure()
+      .then(() => vault.regenerateReadme())
       .then(() => log('info', `vault ready at ${cfg.vaultDir}`))
       .catch((error) => log('warn', `vault unavailable at ${cfg.vaultDir}: ${error?.message ?? error}`))
     return () => {}

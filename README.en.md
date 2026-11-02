@@ -119,6 +119,7 @@ Override the row in your profile's `cordis.patch.yml`:
 | `vaultDir` | `~/dsh-memory` | where the vault lives, `~` supported |
 | `capture.enabled` | `true` | append raw events automatically |
 | `capture.includeToolOutput` | `false` | record tool call counts (never their contents) |
+| `capture.skipPatterns` | 3 built-in | fallback regexes for old logs that carry no provenance |
 | `privacy.useDefaultPatterns` | `true` | built-in key / private-key / token rules |
 | `privacy.denyPatterns` | `[]` | your own regexes, `(?i)` prefix supported |
 | `extractor.enabled` | `false` | when off, nothing is captured *and* no model is ever called |
@@ -161,6 +162,14 @@ Enforced **before** the write, not cleaned up afterwards:
 
 Matches become `[REDACTED]`. The audit log records **which rule fired, never the matched text**. If something slips in anyway, `memory_forget mode=purge` deletes the file.
 
+### Only what you actually said
+
+The harness delivers runtime snapshots, skill catalogs, sampled timestamps, approval notices and compaction checkpoints **disguised as user messages**. Those are not your words, and distilling them would manufacture memories out of nothing.
+
+So capture looks at `source.kind`: only `kind === 'user'` — the message you typed — opens an episode. Everything else is ignored, not even buffered. Logs from older harness versions carry no provenance, and there `capture.skipPatterns` is the text fallback.
+
+Side benefit: an injected message no longer cuts a turn in half, so an episode's boundary is the real turn boundary.
+
 ## Design decisions worth knowing
 
 1. **The entity layer is what makes cross-project work.** Two projects sharing "the same Postgres instance" or "the same tool" connect through an entity page, instead of hoping a vector similarity finds it.
@@ -174,11 +183,11 @@ Matches become `[REDACTED]`. The audit log records **which rule fired, never the
 No network, no real vault:
 
 ```bash
-npm test     # 56 checks across three suites
+npm test     # 62 checks across three suites
 ```
 
 - `test/smoke.mjs` — storage, redaction, BM25 retrieval, entity expansion, supersede chain, extractor parsing
-- `test/capture.mjs` — drives the capture listener with real `session/event` shapes
+- `test/capture.mjs` — drives the capture listener with real `session/event` shapes, including injected context
 - `test/tools.mjs` — runs `execute` + `render` for all eight tools
 
 ## Known limits
@@ -188,7 +197,8 @@ npm test     # 56 checks across three suites
 - No graph view in the Web UI yet; the generated `README.md` and the filesystem are the current browser.
 - Deduplication only matches "same project + same normalized title". Paraphrases become two cards.
 - No `Config` schema is exported, so there is no Settings form; configure via `cordis.patch.yml`. That keeps the plugin truly dependency-free at the cost of writing YAML.
-- Capture granularity is one turn (flushed on `turn/end`), not one message; tool calls inside a turn are counted, not recorded.
+- Capture granularity is one turn (flushed on `turn/end`), not one message; tool calls inside a turn are counted, not recorded. A long multi-step turn keeps the first six visible text blocks.
+- The vault writes its own `.gitignore` (ignoring `*.tmp`, OS junk and `.distill-state.json`); the last one is a per-machine distillation cursor, so a synced vault re-distills once on the other machine and relies on title dedup.
 
 ## License
 

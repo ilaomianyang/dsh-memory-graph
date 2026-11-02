@@ -115,6 +115,7 @@ plugin_manager action=install_bundle target="<本仓库绝对路径>"
 | `vaultDir` | `~/dsh-memory` | 记忆库位置，支持 `~` |
 | `capture.enabled` | `true` | 是否自动追加原始事件 |
 | `capture.includeToolOutput` | `false` | 是否记录工具调用计数（不记录内容） |
+| `capture.skipPatterns` | 3 条内置 | 老版本日志没有来源标记时的兜底正则 |
 | `privacy.useDefaultPatterns` | `true` | 内置密钥/私钥/token 规则 |
 | `privacy.denyPatterns` | `[]` | 追加你自己的正则，支持 `(?i)` 前缀 |
 | `extractor.enabled` | `false` | 关闭时只采集不蒸馏，不产生任何模型调用 |
@@ -157,6 +158,14 @@ plugin_manager action=install_bundle target="<本仓库绝对路径>"
 
 命中即替换为 `[REDACTED]`，审计日志只记录"哪条规则触发"，**不记录命中内容**。万一有东西漏进来，`memory_forget mode=purge` 直接删文件。
 
+### 只记你说的话
+
+Harness 会把运行时快照、技能目录、时间戳、审批通知、压缩摘要**伪装成 user 消息**投递进来。这些不是你的话，蒸馏它们只会凭空造出记忆。
+
+所以采集按 `source.kind` 判断：只有 `kind === 'user'`（你真敲进去的那条）才开一个情节。其余的一律忽略，连 buffer 都不建。老版本日志没有来源标记时，退回 `capture.skipPatterns` 的文本正则兜底。
+
+顺带的好处：一轮里不再被中途插入的注入消息切断，情节的边界就是真正的轮次边界。
+
 ## 设计取舍（重要的几条）
 
 1. **实体层是跨项目的关键**。两个项目共享"同一个 Postgres 实例""同一个工具"，通过 entity 页连起来，而不是靠向量相似度碰运气。
@@ -170,11 +179,11 @@ plugin_manager action=install_bundle target="<本仓库绝对路径>"
 零依赖，不联网，不碰真实记忆库：
 
 ```bash
-npm test     # 27 + 8 + 21 = 56 项检查
+npm test     # 30 + 11 + 21 = 62 项检查
 ```
 
 - `test/smoke.mjs` — 存储、隐私过滤、BM25 检索、实体扩散、supersede 链、蒸馏结果解析
-- `test/capture.mjs` — 用真实的 `session/event` 形状驱动采集，验证一轮一情节、密钥被拦、短轮不入库
+- `test/capture.mjs` — 用真实的 `session/event` 形状驱动采集，验证一轮一情节、密钥被拦、短轮不入库、注入消息不入库
 - `test/tools.mjs` — 逐个跑 8 个工具的 `execute` + `render`
 
 ## 已知边界
@@ -184,7 +193,8 @@ npm test     # 27 + 8 + 21 = 56 项检查
 - 没有 Web UI 图视图，当前靠 `README.md`（自动生成）和文件系统阅读。
 - 卡片去重只按"同项目 + 标题归一化相同"，措辞不同的近义卡片会被存成两张。
 - 没有导出 `Config` schema，所以 Settings 里没有可视化表单；配置走 `cordis.patch.yml`。这是为了让插件保持真正的零依赖（不引用 `@deepseek-ai/schemastery`），代价是配置得写 YAML。
-- 采集粒度是一轮（`turn/end` 触发落盘），不是一条一条消息；一轮里的多次工具调用只记次数不记内容。
+- 采集粒度是一轮（`turn/end` 触发落盘），不是一条一条消息；一轮里的多次工具调用只记次数不记内容。连续多步的长轮次只留前 6 段可见文本。
+- 记忆库自带 `.gitignore`（忽略 `*.tmp`、系统垃圾文件和 `.distill-state.json`）；后者是每台机器各自的蒸馏游标，同步到另一台机器会重新蒸馏一遍，靠标题去重兜底。
 
 ## License
 

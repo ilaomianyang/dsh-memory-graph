@@ -230,6 +230,11 @@ export function createVault(cfg, redactor) {
       if (!(await exists(P.distillState))) {
         await writeAtomic(P.distillState, '{}\n')
       }
+      // The vault is plain text so the owner can version it themselves; keep the
+      // OS junk and the per-machine distillation cursors out of that repo.
+      if (!(await exists(P.gitignore))) {
+        await writeAtomic(P.gitignore, '*.tmp\n.DS_Store\nThumbs.db\n.distill-state.json\n')
+      }
     })()
     return ready
   }
@@ -274,6 +279,10 @@ export function createVault(cfg, redactor) {
     const file = path.join(P.episodes, `${today()}.jsonl`)
     const line = `${JSON.stringify(record)}\n`
     await withLock(`episode:${file}`, () => fsp.appendFile(file, line, 'utf8'))
+    // Keep projects.json honest even before the first card is distilled.
+    if (typeof record?.project === 'string' && record.project !== '') {
+      await touchProject(record.project).catch(() => {})
+    }
     return { file: path.basename(file), bytes: Buffer.byteLength(line) }
   }
 

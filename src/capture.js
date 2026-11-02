@@ -58,6 +58,10 @@ export function registerCapture(ctx, { cfg, vault, redactor }) {
   const buffers = new Map()
   const disposers = []
   const timers = new Map()
+  const skipRules = (cfg.capture.skipPatterns ?? []).map((p) => new RegExp(p, 'i'))
+
+  /** True when the "user" side is really a harness injection, not a person typing. */
+  const injected = (text) => text !== '' && skipRules.some((re) => re.test(text))
 
   const idOf = (session) => String(session?.id ?? session?.header?.id ?? 'unknown')
 
@@ -71,27 +75,31 @@ export function registerCapture(ctx, { cfg, vault, redactor }) {
     return { id, buffer }
   }
 
-  async function flush(id, { force = false } = {}) {
-    const buffer = buffers.get(id)
-    if (!buffer) return
-    const toolCount = buffer.tools
-    const user = truncate(buffer.user, cfg.capture.userChars)
-    const assistant = truncate(buffer.assistant.join('\n'), cfg.capture.assistantChars)
-    if (!force && user === '' && assistant === '') {
-      buffers.delete(id)
-      return
-    }
-    if (user.length + assistant.length < cfg.capture.minChars) {
-      buffers.delete(id)
-      return
-    }
-
+  function drop(id) {
     buffers.delete(id)
     const timer = timers.get(id)
     if (timer) {
       clearTimeout(timer)
       timers.delete(id)
     }
+  }
+
+  async function flush(id) {
+    const buffer = buffers.get(id)
+    if (!buffer) return
+    const toolCount = buffer.tools
+    const user = truncate(buffer.user, cfg.capture.userChars)
+    const assistant = truncate(buffer.assistant.join('\n'), cfg.capture.assistantChars)
+
+    // Every episode is anchored to something the user actually said. A turn with
+    // no user side is context noise, and one too short to mean anything — such as
+    // "ok" — would only fill the vault with lines the extractor cannot use.
+    if (user === '' || user.length + assistant.length < cfg.capture.minChars) {
+      drop(id)
+      return
+    }
+
+    drop(id)
 
     const redactedUser = redactor.redact(user).text
     const redactedAssistant = redactor.redact(assistant).text
@@ -134,23 +142,32 @@ export function registerCapture(ctx, { cfg, vault, redactor }) {
 
       if (type !== 'user/message' && type !== 'assistant/message' && type !== 'tool/result') return
 
-      const { id, buffer } = bufferOf(session)
-
       if (type === 'user/message') {
         const text = eventText(event)
-        if (buffer.user !== '' || buffer.assistant.length > 0) {
+        // The harness delivers runtime snapshots, skill catalogs, sampled time,
+        // approval notices and compaction checkpoints through the same channel as
+        // the person typing. `source.kind` tells them apart; older logs carry no
+        // provenance, so fall back to the text patterns. Only what the user
+        // actually said opens a memory episode.
+        const kind = event?.data?.source?.kind
+        const synthetic = typeof kind === 'string' ? kind !== 'user' : injected(text)
+        if (synthetic || text === '') return
+
+        const id = idOf(session)
+        const open = buffers.get(id)
+        if (open && (open.user !== '' || open.assistant.length > 0)) {
+          // A turn that never closed (interrupted, or an older harness): keep it.
           flush(id).catch(() => {})
-          buffers.delete(id)
-          bufferOf(session)
         }
-        const fresh = buffers.get(id)
-        if (fresh) {
-          fresh.user = text
-          fresh.turn = typeof event?.data?.turn === 'number' ? event.data.turn : fresh.turn
-        }
+
+        const { buffer } = bufferOf(session)
+        buffer.user = text
+        if (typeof event?.data?.turn === 'number') buffer.turn = event.data.turn
         schedule(id)
         return
       }
+
+      const { id, buffer } = bufferOf(session)
 
       if (type === 'assistant/message') {
         const text = eventText(event)
@@ -170,7 +187,7 @@ export function registerCapture(ctx, { cfg, vault, redactor }) {
     () => {
       for (const timer of timers.values()) clearTimeout(timer)
       timers.clear()
-      for (const id of [...buffers.keys()]) flush(id, { force: true }).catch(() => {})
+      for (const id of [...buffers.keys()]) flush(id).catch(() => {})
     },
   ]
 }

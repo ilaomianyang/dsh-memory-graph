@@ -23,6 +23,17 @@ export const DEFAULT_DENY_PATTERNS = [
   '(?i)(password|passwd|secret|api[_-]?key|access[_-]?token)\\s*[:=]\\s*["\']?\\S{6,}',
 ]
 
+/**
+ * Text the harness injects into the conversation as a user message: compaction
+ * checkpoints, runtime-context snapshots, skill-catalog reminders. They are not
+ * user intent, and distilling them would manufacture memories out of nothing.
+ */
+export const DEFAULT_SKIP_PATTERNS = [
+  '^This is an automatically generated checkpoint',
+  '^Current runtime context\\.',
+  '<system-reminder>',
+]
+
 const DEFAULTS = {
   enabled: true,
   vaultDir: '',
@@ -36,6 +47,7 @@ const DEFAULTS = {
     assistantChars: 1500,
     includeToolOutput: false,
     minChars: 12,
+    skipPatterns: [...DEFAULT_SKIP_PATTERNS],
   },
   privacy: {
     useDefaultPatterns: true,
@@ -114,6 +126,20 @@ export function resolveConfig(raw) {
 
   cfg.privacy.denyPatterns = Array.isArray(cfg.privacy.denyPatterns)
     ? cfg.privacy.denyPatterns.filter((p) => typeof p === 'string' && p.trim() !== '')
+    : []
+
+  // A user list replaces the defaults; drop anything that is not a usable regex
+  // rather than letting one typo disable capture for the whole session.
+  cfg.capture.skipPatterns = Array.isArray(cfg.capture.skipPatterns)
+    ? cfg.capture.skipPatterns.filter((p) => {
+        if (typeof p !== 'string' || p.trim() === '') return false
+        try {
+          new RegExp(p, 'i')
+          return true
+        } catch {
+          return false
+        }
+      })
     : []
 
   cfg.extractor.baseUrl = String(cfg.extractor.baseUrl || '').replace(/\/+$/, '')

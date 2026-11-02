@@ -55,7 +55,11 @@ emit('session/event', session, {
   type: 'user/message',
   seq: 1,
   time: Date.now(),
-  data: { role: 'user', content: [{ type: 'text', text: '把 vault 改成纯文本，顺便 key 是 sk-abcdefghijklmnopqrstuvwxyz012345' }] },
+  data: {
+    role: 'user',
+    content: [{ type: 'text', text: '把 vault 改成纯文本，顺便 key 是 sk-abcdefghijklmnopqrstuvwxyz012345' }],
+    source: { kind: 'user', rpcId: 'r-1', clientTimeZone: 'Asia/Shanghai' },
+  },
 })
 emit('session/event', session, {
   type: 'assistant/message',
@@ -147,6 +151,73 @@ const allLines = (await fsp.readFile(path.join(dir, 'episodes', files[0]), 'utf8
 check('a session without cwd falls back to the default project', () => {
   assert.equal(allLines.length, 3, String(allLines.length))
   assert.equal(JSON.parse(allLines[2]).project, cfg.defaultProject)
+})
+
+/* Injected context — a compaction checkpoint, a runtime snapshot, a time
+   prelude, a skill catalog, an approval notice — arrives as a user message but
+   is not a conversation. `source.kind` marks it; the last entry has no
+   provenance at all, to exercise the text-pattern fallback. */
+const injections = [
+  { source: { kind: 'compact-checkpoint', form: 'checkpoint' }, text: 'This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background.' },
+  { source: { kind: 'runtime-context', form: 'snapshot' }, text: 'Current runtime context. This snapshot supersedes earlier runtime-context snapshots.' },
+  { source: { kind: 'time-context', form: 'sampled' }, text: 'Time sampled while preparing turn 3, step 1: 2026-11-02T15:37:18+08:00[Asia/Shanghai]' },
+  { source: { kind: 'skill-catalog', form: 'catalog' }, text: '<system-reminder>\nThe available skill catalog changed. This complete catalog replaces every earlier available-skills list in this session.\n</system-reminder>' },
+  { source: { kind: 'user-approval' }, text: 'The approval policy changed from "ask" to "never" (changed by the user).' },
+  { text: 'Current runtime context. This snapshot supersedes earlier runtime-context snapshots.' },
+]
+for (const [i, { source, text }] of injections.entries()) {
+  emit('session/event', session, {
+    type: 'user/message',
+    seq: 20 + i,
+    time: Date.now(),
+    data: { role: 'user', content: [{ type: 'text', text }], ...(source ? { source } : {}) },
+  })
+  emit('session/event', session, {
+    type: 'assistant/message',
+    seq: 40 + i,
+    time: Date.now(),
+    data: { turn: 20 + i, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: '收到，继续原来的工作。' }] }, stream: null },
+  })
+  emit('session/event', session, { type: 'turn/end', seq: 60 + i, time: Date.now(), data: { turn: 20 + i, reason: { kind: 'completed' } } })
+}
+await new Promise((resolve) => setTimeout(resolve, 60))
+
+const readLines = async () =>
+  (await fsp.readFile(path.join(dir, 'episodes', files[0]), 'utf8')).split('\n').filter((l) => l.trim() !== '')
+
+const afterInjections = await readLines()
+check('injected context is never stored as a memory', () => {
+  assert.equal(afterInjections.length, 3, String(afterInjections.length))
+  assert.equal(afterInjections.some((l) => l.includes('automatically generated checkpoint')), false)
+  assert.equal(afterInjections.some((l) => l.includes('system-reminder')), false)
+  assert.equal(afterInjections.some((l) => l.includes('Time sampled')), false)
+  assert.equal(afterInjections.some((l) => l.includes('approval policy')), false)
+})
+
+/* The filter must not swallow the real turn that follows an injection. */
+emit('session/event', session, {
+  type: 'user/message',
+  seq: 80,
+  time: Date.now(),
+  data: { role: 'user', content: [{ type: 'text', text: '压缩之后继续：请检查一下 capture 的 flush 时机。' }], source: { kind: 'user', rpcId: 'r-2' } },
+})
+emit('session/event', session, {
+  type: 'assistant/message',
+  seq: 81,
+  time: Date.now(),
+  data: { turn: 30, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: 'flush 现在挂在 turn/end 上。' }] }, stream: null },
+})
+emit('session/event', session, { type: 'turn/end', seq: 82, time: Date.now(), data: { turn: 30, reason: { kind: 'completed' } } })
+await new Promise((resolve) => setTimeout(resolve, 60))
+
+const afterReal = await readLines()
+check('a real turn after an injection is still stored', () => {
+  assert.equal(afterReal.length, 4, String(afterReal.length))
+  assert.ok(afterReal[3].includes('flush'), afterReal[3])
+})
+
+check('an injected turn is dropped even when the model replied to it', () => {
+  assert.equal(afterReal.some((l) => l.includes('收到，继续原来的工作')), false, afterReal.join('\n'))
 })
 
 check('disposing removes the listeners', () => {
