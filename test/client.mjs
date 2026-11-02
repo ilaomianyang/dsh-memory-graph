@@ -559,4 +559,105 @@ await check('the entry point is a plain bundle, not a module', async () => {
   assert.ok(source.includes("require('react')"), 'react comes from the frozen require table')
 })
 
+// ---------------------------------------------------------------------------
+// The real browser entry
+// ---------------------------------------------------------------------------
+
+/**
+ * Evaluate client.js the way the loader does: as a plain script on a page that
+ * has `window.__ModuleLoader__`, then run the factory with a require stub that
+ * only knows `react` (the frozen require table). Returns the registration and
+ * a context whose slot registry records what the module contributes.
+ */
+const openBrowserBundle = async (language = 'zh-CN') => {
+  const { readFile } = await import('node:fs/promises')
+  const { runInNewContext } = await import('node:vm')
+  const source = await readFile(new URL('../client.js', import.meta.url), 'utf8')
+  const registered = []
+  const styles = []
+  const sandbox = {
+    console,
+    navigator: { language },
+    // The page polls for the settings service on a timer. These checks only
+    // need the synchronous first paint, so timers park instead of firing.
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+    document: {
+      head: { appendChild: (node) => styles.push(node) },
+      getElementById: (id) => styles.find((node) => node.id === id) || null,
+      createElement: () => ({ dataset: {}, textContent: '' }),
+    },
+    window: { __ModuleLoader__: { load: (registration) => registered.push(registration) } },
+  }
+  runInNewContext(source, sandbox, { filename: 'client.js' })
+  assert.equal(registered.length, 1, 'the bundle registers exactly one module')
+
+  const runtime = createReact()
+  const required = []
+  const exports = registered[0].factory((id) => {
+    required.push(id)
+    if (id === 'react') return runtime.react
+    throw new Error(`the bundle must not require ${id}`)
+  })
+
+  const injected = []
+  const sections = []
+  const form = makeForm(clone(SERVED))
+  const ctx = {
+    ...makeCtx(form),
+    slots: {
+      inject: (name, fn) => {
+        injected.push(name)
+        fn()
+      },
+      register: (spec, Component) => sections.push({ spec, Component }),
+    },
+  }
+  return { registration: registered[0], exports, required, injected, sections, styles, runtime, ctx, form }
+}
+
+await check('the browser entry registers a module the loader can address', async () => {
+  const bundle = await openBrowserBundle()
+  // The registration id is how the host matches this module to the package row
+  // it composed from `dsh.client`, so it has to be the package name itself.
+  assert.equal(bundle.registration.id, client.PACKAGE_NAME)
+  assert.ok(typeof bundle.registration.factory === 'function')
+  assert.deepEqual([...bundle.required], ['react'], 'react is the only module it asks for')
+  assert.equal(bundle.exports.name, client.PACKAGE_NAME)
+  assert.deepEqual([...bundle.exports.inject], ['slots'], 'the settings slot is the only capability needed')
+  assert.equal(typeof bundle.exports.apply, 'function')
+})
+
+await check('applying it contributes the Memory Graph page to Settings', async () => {
+  const bundle = await openBrowserBundle()
+  bundle.exports.apply(bundle.ctx)
+  assert.deepEqual([...bundle.injected], ['settings.section'], 'it waits for the Settings slot')
+  assert.equal(bundle.sections.length, 1, 'exactly one section is registered')
+  const [{ spec, Component }] = bundle.sections
+  assert.equal(spec.name, 'settings.section')
+  assert.equal(spec.id, client.HOST_ENTRY_ID)
+  // 15 插件 / 20 预设 / 21 导入 / 40 桌宠 — the page belongs after presets.
+  assert.equal(spec.order, 25)
+  assert.equal(bundle.styles.length, 1, 'applying installs the stylesheet')
+  assert.equal(bundle.styles[0].dataset.plugin, client.PACKAGE_NAME)
+  // The thing it registered is the whole page, wired to the served form: this
+  // is the path the browser takes, where the mount poll would find no timer.
+  const view = mount(Component, bundle.runtime)
+  assert.equal(byClass(view.tree, 'mg-root').length, 1)
+  assert.ok(control(view.tree, 'capture.enabled'), 'the served switch is on screen')
+  assert.ok(byClass(view.tree, 'mg-state').length === 0, 'a served form never shows the loading state')
+  view.unmount()
+})
+
+await check('the sidebar label speaks whatever language the page is in', async () => {
+  const navLabel = async (language) => {
+    const bundle = await openBrowserBundle(language)
+    bundle.exports.apply(bundle.ctx)
+    const { spec } = bundle.sections[0]
+    return typeof spec.label === 'function' ? spec.label() : spec.label
+  }
+  assert.equal(await navLabel('zh-CN'), '记忆图谱')
+  assert.equal(await navLabel('en-US'), 'Memory Graph')
+})
+
 console.log(process.exitCode === 1 ? '\nSOME CHECKS FAILED' : `\nall ${passed} checks passed`)

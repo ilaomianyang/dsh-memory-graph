@@ -11,7 +11,7 @@
 - 底部粘着一条保存栏：未保存改动数、保存中、成功/失败提示；宿主只读时保存按钮直接禁用。保存被拒（`mutate` 返回 `false`）会清空草稿并提示"配置刚被别处改过"，而不是假装成功。
 - 抽取器那一组跟着路线走：`transport: 'harness'` 只显示模型相关的几项，选 `http` 才出现 endpoint / 路径 / key / temperature，`useCurrentModel` 与 `provider` 反过来隐藏。切换在下一次保存前就能看到效果（可见性用草稿值算，不是等回读）。
 - 页面底部写明哪四项不在这页上（总开关 / 记忆库目录 / 默认项目 / 跨项目连接）、为什么、以及去 `cordis.patch.yml` 的哪一行改。
-- `test/client.mjs`（17 项）：用一个最小 React 替身把页面真挂起来跑——控件与字段表一致、`transport` 切换后 http 项才出现、空的内联 key 不会被当成"删除"发出去、越界数字到不了线上、宿主拒绝后清空草稿并报错、`unset` 与 `set` 不混用、样式表只有一个带包名标记的 `<style>`、`client.js` 里不许有 `export`/`import`（loader 按脚本求值）。
+- `test/client.mjs`（20 项）：用一个最小 React 替身把页面真挂起来跑——控件与字段表一致、`transport` 切换后 http 项才出现、空的内联 key 不会被当成"删除"发出去、越界数字到不了线上、宿主拒绝后清空草稿并报错、`unset` 与 `set` 不混用、样式表只有一个带包名标记的 `<style>`、`client.js` 里不许有 `export`/`import`（loader 按脚本求值）；最后把 `client.js` 放进一个带 `window.__ModuleLoader__` 的假页面里求值，走一遍 factory → `apply` → `settings.section` 的**真实浏览器路径**（只 require `react`、注册 id 是包名、order 25、侧栏标签跟随语言）。
 - `package.json`：新增 `exports["./client"]`、`dsh.client = { platform: 'web', inject: [] }`，`files` 带上 `client.js`。
 
 **Fixed**
@@ -24,7 +24,7 @@
 
 - 配置入口从「schemastery 的通用表单」换成自己的页面；README / README.en 的「配置」一节重写（四组、默认值表、哪些键不在这页上、为什么）。
 - **装完、或改过 `client.js` / `package.json` 之后必须重启一次 Harness**：Web 侧的插件清单是启动时扫一遍 loader 条目、读各自 `package.json` 的 `dsh.client` 定的，这份扫描结果在进程里缓存、不再重读。README 里写清了，免得装完以为插件坏了。
-- 测试口径：`npm test` 148 项检查（38 + 13 + 17 + 11 + 21 + 48）。
+- 测试口径：`npm test` 151 项检查（38 + 13 + 20 + 11 + 21 + 48）。
 
 ## 0.3.0 — 2026-11-02
 

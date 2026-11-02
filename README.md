@@ -260,13 +260,13 @@ Harness 会把运行时快照、技能目录、时间戳、审批通知、压缩
 零依赖，不联网，不碰真实记忆库：
 
 ```bash
-npm test        # 38 + 13 + 17 + 11 + 21 + 48 = 148 项检查，另加 25 题检索评测
+npm test        # 38 + 13 + 20 + 11 + 21 + 48 = 151 项检查，另加 25 题检索评测
 npm run eval    # 只跑检索评测（离线，确定性的）
 ```
 
 - `test/smoke.mjs` — 存储、隐私过滤、BM25 检索、实体扩散、supersede 链、蒸馏结果解析
 - `test/schema.mjs` — 设置页和运行时不许漂移：双向比对 `Config({})` 和 `resolveConfig({})` 的每个叶子（只有 `vaultDir` 例外，页面存原始文本、运行时存绝对路径）——页面多一格没用的、少一格看不见的都算失败；另外验证 `transport` 只认那两个值、数值边界、`apiKey` 被标成 secret、28 个 volatile 叶子正好等于页面的字段表、四个结构键不许出现在页面字段表里
-- `test/client.mjs` — 把设置页挂在一个够用的 React 替身上跑：页面画出的控件 = 该显示的字段、切换 `transport` 后 http 那几项才出现、空的内联 key 不会被当成"删除"发出去、越界的数字到不了线上、宿主拒绝后清空草稿并报错、「恢复默认」发的是 `unset` 而不是 `set`、样式表只有一个带包名标记的 `<style>`、`client.js` 里不许出现 `export`/`import`（loader 按脚本求值）
+- `test/client.mjs` — 把设置页挂在一个够用的 React 替身上跑：页面画出的控件 = 该显示的字段、切换 `transport` 后 http 那几项才出现、空的内联 key 不会被当成"删除"发出去、越界的数字到不了线上、宿主拒绝后清空草稿并报错、「恢复默认」发的是 `unset` 而不是 `set`、样式表只有一个带包名标记的 `<style>`、`client.js` 里不许出现 `export`/`import`（loader 按脚本求值）；最后把 `client.js` 真的放进一个带 `window.__ModuleLoader__` 的假页面里求值，走一遍 factory → `apply` → 注册 `settings.section` 的浏览器路径（只 `require('react')`、注册 id 是包名、order 25、侧栏标签跟随页面语言）
 - `test/capture.mjs` — 用真实的 `session/event` 形状驱动采集，验证一轮一情节、密钥被拦、短轮不入库、注入消息不入库
 - `test/tools.mjs` — 逐个跑 8 个工具的 `execute` + `render`
 - `test/extract.mjs` — 抽取器：`fetch` 打桩验证 http 路线（提示词构造、key 解析顺序、JSON 解析容错、每张卡片归到自己的项目、游标前进、dry run 不落盘、密钥在写入前被拦住），再用一个假的 `llm` 服务验证 harness 路线（借用设置里的模型与思考档、显式覆盖、没有选中模型时的报错、`finish` 各种终态、取消、空回复、以及全程不碰 `fetch`）

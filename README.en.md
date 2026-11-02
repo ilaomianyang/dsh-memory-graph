@@ -266,13 +266,13 @@ Side benefit: an injected message no longer cuts a turn in half, so an episode's
 No network, no real vault:
 
 ```bash
-npm test        # 38 + 13 + 17 + 11 + 21 + 48 = 148 checks, plus the 25-question retrieval eval
+npm test        # 38 + 13 + 20 + 11 + 21 + 48 = 151 checks, plus the 25-question retrieval eval
 npm run eval    # retrieval eval only (offline, deterministic)
 ```
 
 - `test/smoke.mjs` — storage, redaction, BM25 retrieval, entity expansion, supersede chain, extractor parsing
 - `test/schema.mjs` — the Settings page must not drift from the runtime: every leaf of `Config({})` is compared with `resolveConfig({})` in both directions (`vaultDir` is the one exception — the page holds raw text, the runtime an absolute path), so a dead control and an invisible setting both fail; plus the transport union, numeric bounds, the `secret` role on the inline key, the 28 volatile leaves matching the page's field table exactly, and the four structural keys staying off it
-- `test/client.mjs` — mounts the page on a minimal React stand-in: the controls drawn equal the fields that should show, switching `transport` reveals the http knobs, an empty inline key is never sent as a deletion, an out-of-range number never reaches the wire, a refused save clears the drafts and explains itself, restore sends `unset` rather than `set`, the stylesheet is a single `<style>` tagged with the package name, and `client.js` contains no `export`/`import` (the loader evaluates it as a script)
+- `test/client.mjs` — mounts the page on a minimal React stand-in: the controls drawn equal the fields that should show, switching `transport` reveals the http knobs, an empty inline key is never sent as a deletion, an out-of-range number never reaches the wire, a refused save clears the drafts and explains itself, restore sends `unset` rather than `set`, the stylesheet is a single `<style>` tagged with the package name, and `client.js` contains no `export`/`import` (the loader evaluates it as a script). It then evaluates `client.js` in a fake page carrying `window.__ModuleLoader__` and walks the real browser path — factory, `apply`, `settings.section` registration — checking that `react` is the only module required, the registration id is the package name, the order is 25, and the sidebar label follows the page language
 - `test/capture.mjs` — drives the capture listener with real `session/event` shapes, including injected context
 - `test/tools.mjs` — runs `execute` + `render` for all eight tools
 - `test/extract.mjs` — the extractor: `fetch` stubbed for the http route (prompt construction, key resolution order, tolerant JSON parsing, per-card project attribution, cursor advance, dry run writing nothing, secrets stopped before the write), then a fake `llm` service for the harness route (borrows the Settings model and thinking level, honours an explicit override, explains a missing selection, handles every terminal `finish`, reports cancellation, rejects an empty completion, and never touches `fetch`)
