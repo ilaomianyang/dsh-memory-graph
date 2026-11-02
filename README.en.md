@@ -246,11 +246,19 @@ The Conversation tab row (对话 / 上下文 / 编队 / …) gained a cell: 记�
 - A card from another project arrives through a shared entity (dashed outline, one shade dimmer). That is the only reason the entity layer exists, so it is visible on the graph.
 - Click any node and the side panel opens its full text; click the empty canvas to close it. The header carries the counts, the project, the cross-project count and a refresh button, and the tab re-reads quietly every 20 seconds while it is open.
 
+![The Memory tab: this vault has no cards yet, so the graph is episodes only](docs/session-tab.png)
+
+Click an episode and the side panel shows what you actually said that turn:
+
+![One episode opened](docs/session-tab-open.png)
+
+Both screenshots are from a real session, on a vault that has not been distilled yet — so there are episodes but no cards or entities, which is exactly what the note at the top of the panel says.
+
 The data is not baked into the page: the host registers an exact Fetch route at `/api/memory-graph.graph`. DSH's Connection verifies the browser's signature first and only lets an owner Peer through, so the plugin needs no second auth scheme and never exposes the vault directory to the page. The layout is computed on the **host** (deterministic force layout) and the browser only draws the coordinates, so reopening the tab shows the same picture.
 
 Caps: 40 episodes, 60 cards, 40 entities, 12 cross-project cards, 420 edges. The header still reports the real totals — a graph that cannot be read is not worth drawing.
 
-> After editing `client.js` the app needs one restart: the host scans and caches client bundles in-process at startup.
+> How a change takes effect: editing `client.js` needs only a page refresh (the host reads that file per request); editing the host side (`index.js` / `src/*.js`) needs the plugin to re-`apply`, which the plugin manager does when you switch 记忆图谱 off and on again — no full restart.
 
 ## Cross-project means one person's projects, not shared memory
 
@@ -290,7 +298,7 @@ Side benefit: an injected message no longer cuts a turn in half, so an episode's
 No network, no real vault:
 
 ```bash
-npm test        # 43 + 13 + 28 + 11 + 21 + 54 + 15 = 185 checks, plus the 25-question retrieval eval
+npm test        # 43 + 13 + 29 + 11 + 21 + 54 + 15 = 186 checks, plus the 25-question retrieval eval
 npm run eval    # retrieval eval only (offline, deterministic)
 ```
 
@@ -358,7 +366,7 @@ One deliberate asymmetry: **asking about the past gets its own path**. "Is the e
 - Distillation quality depends on the extractor model and **only happens when you call it**. Pair it with a scheduled task.
 - Harness mode borrows "whatever model is currently selected in Settings", so switching models mid-conversation also switches the extractor; turn `useCurrentModel` off to pin one. It spends that provider's quota — being a plugin does not make the calls free.
 - `graph.html` is a **static HTML file** (a snapshot of the whole vault). The Memory tab in a conversation is a real GUI panel, but it draws only the **current session**, not a browsable whole-library graph — zoom, search and filtering still live in `graph.html`.
-- The Memory tab reads one route, `/api/memory-graph.graph`, so it needs an environment that runs the Web GUI; in a headless or CLI profile the plugin works as usual and simply has no tab. After editing `client.js` the app needs one restart (client bundles are scanned and cached in-process).
+- The Memory tab reads one route, `/api/memory-graph.graph`, so it needs an environment that runs the Web GUI; in a headless or CLI profile the plugin works as usual and simply has no tab. Editing `client.js` needs only a page refresh; editing the host side needs the plugin to re-`apply` (switch it off and on in the plugin manager).
 - Deduplication starts at "same project + same normalized title" and widens to titles sharing **at least 0.55 of their tokens** (the same bigram tokenizer retrieval uses; measured on the eval set: unrelated cards peak at 0.20, one model's re-wordings of the same memory scored 0.60–0.78). So "蒸馏走独立模型接口" and "蒸馏用独立模型接口" are now one card instead of two nodes pulling retrieval apart. A card that carries `supersedes` skips that pass — "monitoring moves to Prometheus" reads like "monitoring moved to Uptime Kuma" but is a new decision. Opposite meanings phrased far apart still become two cards: this compares wording, it does not read intent.
 - The page is four static section cards drawn from a hand-written field table, not a generic reflection of the schema; `test/schema.mjs` keeps the two in sync, but a schema change that skips that table will show up as a failing test rather than a new control. Array-valued keys (`skipPatterns`, `denyPatterns`) are still edited as one entry per line in a text area.
 - Anything changed outside the page is picked up on the next save round-trip: the page re-reads the served value and keeps your unsaved drafts, but it does not poll.

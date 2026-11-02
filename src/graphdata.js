@@ -34,6 +34,8 @@ export const GRAPH_LIMITS = {
 const WIDTH = 1080
 const HEIGHT = 640
 const PADDING = 56
+// How far the normalisation may stretch one axis relative to the other.
+const STRETCH = 2.6
 
 function clip(text, max) {
   const value = String(text ?? '')
@@ -193,12 +195,18 @@ export function layoutNodes(nodes, links, { width = WIDTH, height = HEIGHT, padd
   }
   const spanX = Math.max(1, maxX - minX)
   const spanY = Math.max(1, maxY - minY)
-  const scale = Math.min((width - padding * 2) / spanX, (height - padding * 2) / spanY)
-  const offsetX = (width - spanX * scale) / 2
-  const offsetY = (height - spanY * scale) / 2
+  // Fill the box on both axes instead of fitting the smaller one: the canvas is
+  // 1080×640, and a star of eight episodes would otherwise sit in a small circle
+  // with two thirds of the canvas empty. The distortion is capped so a nearly
+  // one-dimensional layout (a long chain) is not smeared flat.
+  const base = Math.min((width - padding * 2) / spanX, (height - padding * 2) / spanY)
+  const scaleX = Math.min((width - padding * 2) / spanX, base * STRETCH)
+  const scaleY = Math.min((height - padding * 2) / spanY, base * STRETCH)
+  const offsetX = (width - spanX * scaleX) / 2
+  const offsetY = (height - spanY * scaleY) / 2
   nodes.forEach((node, i) => {
-    node.x = Math.round((pos[i].x - minX) * scale + offsetX)
-    node.y = Math.round((pos[i].y - minY) * scale + offsetY)
+    node.x = Math.round((pos[i].x - minX) * scaleX + offsetX)
+    node.y = Math.round((pos[i].y - minY) * scaleY + offsetY)
   })
 }
 
@@ -267,7 +275,7 @@ export async function buildSessionGraph({ vault, session, project: fallbackProje
     k: 'session',
     label: '',
     sub: `${records.length}`,
-    r: 13,
+    r: 15,
   })
 
   // --- this conversation's own words
@@ -282,7 +290,7 @@ export async function buildSessionGraph({ vault, session, project: fallbackProje
       sub: String(record.t ?? '').slice(11, 16),
       text: clip(record.user, caps.episodePreview),
       t: record.t ?? null,
-      r: 5,
+      r: 7,
     })
     link(sessionKey, key, 'said')
   }
@@ -314,7 +322,7 @@ export async function buildSessionGraph({ vault, session, project: fallbackProje
       supersededBy: card.supersededBy ?? null,
       hot,
       foreign,
-      r: hot ? 9 : 7,
+      r: hot ? 12 : 9,
     })
     cardByKey.set(card.id, key)
     if (hot) link(sessionKey, key, 'recall')
@@ -339,7 +347,7 @@ export async function buildSessionGraph({ vault, session, project: fallbackProje
       sub: entity.type ?? 'concept',
       slug,
       mentions: (entity.mentions ?? []).length,
-      r: 6,
+      r: 7,
     })
   }
 
@@ -394,7 +402,7 @@ export async function buildSessionGraph({ vault, session, project: fallbackProje
       supersededBy: card.supersededBy ?? null,
       hot: false,
       foreign: true,
-      r: 6,
+      r: 9,
     })
     cardByKey.set(card.id, key)
     for (const slug of card.entities ?? []) {

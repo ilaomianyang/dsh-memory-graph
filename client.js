@@ -678,6 +678,15 @@ const CSS = `
   font-size: 11px;
 }
 .mgv-spacer { flex: 1 1 auto; }
+.mgv-note {
+  flex: 0 0 auto;
+  padding: 6px 16px 7px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--dsw-alias-label-secondary, #5a5a5a);
+  background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.04));
+  border-bottom: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.08));
+}
 .mgv-body { display: flex; flex: 1 1 auto; min-height: 0; }
 .mgv-canvas { flex: 1 1 auto; min-width: 0; display: block; touch-action: none; }
 .mgv-link { stroke: var(--dsw-alias-border-l1, rgba(0, 0, 0, 0.16)); stroke-width: 1; }
@@ -691,7 +700,8 @@ const CSS = `
 }
 .mgv-node[data-k="session"] text { font-size: 11.5px; font-weight: 600; fill: var(--dsw-alias-label-primary, #1c1c1c); }
 .mgv-node[data-k="card"] text { fill: var(--dsw-alias-label-primary, #1c1c1c); }
-.mgv-node[data-dim="true"] { opacity: 0.22; }
+.mgv-node[data-k="episode"] text { font-size: 11px; }
+.mgv-node[data-dim="true"] { opacity: 0.34; }
 .mgv-node[data-selected="true"] circle { stroke: var(--dsw-alias-label-primary, #1c1c1c); stroke-width: 2; }
 .mgv-aside {
   flex: 0 0 286px;
@@ -1211,6 +1221,12 @@ const KIND_FILL = {
   note: '#5a6470',
 }
 
+// The two structural layers are not card kinds, so they get their own colours:
+// an episode is this conversation's own words, an entity is what links it to
+// everything else.
+const EPISODE_FILL = '#9fb4d3'
+const ENTITY_FILL = '#9aa4b2'
+
 /**
  * The registered route is an absolute `/api/...` path, but the page that runs
  * this bundle is not always at the origin root: a mounted deployment serves the
@@ -1231,8 +1247,8 @@ function apiUrl(path) {
 
 function fillOf(node) {
   if (node.k === 'session') return '#111318'
-  if (node.k === 'episode') return '#c9d3e0'
-  if (node.k === 'entity') return '#9aa4b2'
+  if (node.k === 'episode') return EPISODE_FILL
+  if (node.k === 'entity') return ENTITY_FILL
   if (node.foreign) return '#e2e6ee'
   return KIND_FILL[node.kind] ?? KIND_FILL.note
 }
@@ -1372,9 +1388,9 @@ function createGraphView(ctx, React) {
       h(
         'div',
         { className: 'mgv-legend' },
-        h('span', null, h('i', { className: 'mgv-dot', style: { background: '#c9d3e0' } }), t('情节', 'episode')),
+        h('span', null, h('i', { className: 'mgv-dot', style: { background: EPISODE_FILL } }), t('情节', 'episode')),
         h('span', null, h('i', { className: 'mgv-dot', style: { background: KIND_FILL.decision } }), t('卡片', 'card')),
-        h('span', null, h('i', { className: 'mgv-dot', style: { background: '#9aa4b2' } }), t('实体', 'entity')),
+        h('span', null, h('i', { className: 'mgv-dot', style: { background: ENTITY_FILL } }), t('实体', 'entity')),
       ),
       h(
         'button',
@@ -1445,6 +1461,19 @@ function createGraphView(ctx, React) {
       'div',
       { className: 'mgv-root' },
       head,
+      // An empty half of the picture should say which half is missing: with no
+      // cards in the vault the graph can only ever show episodes, and that reads
+      // as "broken" unless it is spelled out.
+      data && data.counts.cards === 0 && data.counts.episodes > 0
+        ? h(
+            'div',
+            { className: 'mgv-note' },
+            t(
+              '记忆库里还没有卡片：蒸馏一次之后，这里会从这些情节长出卡片，以及把它们连起来的实体。',
+              'No cards in the vault yet: one distillation grows cards — and the entities that link them — out of these episodes.',
+            ),
+          )
+        : null,
       h(
         'div',
         { className: 'mgv-body' },
@@ -1469,7 +1498,7 @@ function createGraphView(ctx, React) {
               y1: a.y,
               x2: b.x,
               y2: b.y,
-              opacity: dim ? 0.25 : 0.9,
+              opacity: dim ? 0.35 : 0.9,
             })
           }),
           nodes.map((node) => {

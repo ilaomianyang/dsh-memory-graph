@@ -837,6 +837,29 @@ await check('clicking a card opens it in the side panel', async () => {
   view.unmount()
 })
 
+await check('an empty card layer says which half is missing', async () => {
+  const withCards = await renderMemoryTab()
+  assert.equal(byClass(withCards.view.tree, 'mgv-note').length, 0, 'a vault with cards needs no note')
+  withCards.view.unmount()
+
+  // 0 cards is the state right after a first install: the graph can only show
+  // episodes, which looks broken unless the panel says why.
+  const noCards = await renderMemoryTab({
+    payload: {
+      ...SESSION_GRAPH,
+      counts: { ...SESSION_GRAPH.counts, cards: 0 },
+      recall: [],
+      nodes: SESSION_GRAPH.nodes.filter((node) => node.k !== 'card'),
+      links: [{ s: 's:session', t: 'e:2026-11-02.jsonl:0', k: 'said' }],
+    },
+  })
+  const note = byClass(noCards.view.tree, 'mgv-note')
+  assert.equal(note.length, 1)
+  assert.ok(text(note[0]).includes('蒸馏'), 'it points at the step that fills the card layer')
+  assert.equal(byClass(noCards.view.tree, 'mgv-node').length, 2, 'the episodes are still drawn')
+  noCards.view.unmount()
+})
+
 await check('a session with no episodes explains itself instead of drawing', async () => {
   const { view } = await renderMemoryTab({
     payload: { ...SESSION_GRAPH, empty: true, counts: { ...SESSION_GRAPH.counts, episodes: 0 }, nodes: [], links: [], recall: [] },
