@@ -131,5 +131,20 @@ jobs:
           }
           npm pack | Out-Null
           $tgz = (Get-ChildItem *.tgz | Select-Object -First 1).Name
-          gh release create $tag $tgz --title $tag --generate-notes
+          # --generate-notes only produces "Full Changelog: …" in a repository
+          # that does not take pull requests, which is this one. The CHANGELOG
+          # section for the version is the notes a reader actually wants, so use
+          # that and keep --generate-notes as the fallback.
+          $ver = $tag -replace '^v', ''
+          $md = Get-Content CHANGELOG.md -Raw
+          $section = [regex]::Match($md, '(?ms)^##\s+' + [regex]::Escape($ver) + '[^\r\n]*\r?\n(.*?)(?=^##\s|\z)')
+          if ($section.Success -and $section.Groups[1].Value.Trim()) {
+            $file = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+            Set-Content -Path $file -Value $section.Groups[1].Value.Trim() -Encoding utf8
+            gh release create $tag $tgz --title $tag --notes-file $file
+            Write-Output "notes came from CHANGELOG.md, section $ver"
+          } else {
+            gh release create $tag $tgz --title $tag --generate-notes
+            Write-Output "no CHANGELOG section for $ver; falling back to generated notes"
+          }
           Write-Output "released $tag with $tgz"

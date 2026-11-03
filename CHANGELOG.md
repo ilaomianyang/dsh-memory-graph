@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.4 — 2026-11-03
+
+**Changed**
+
+- Release 正文改成 `CHANGELOG.md` 里对应版本的段落。`--generate-notes` 在这个仓库里只会吐出一句 `Full Changelog: …`——它是靠合并的 PR 生成的，而这里全是直接提交，所以 Release 页面等于空的。现在发布流程从 `CHANGELOG.md` 里切出 `## <version>` 那一段当正文，切不到才退回 `--generate-notes`。也就是说：想写什么 Release 说明，就往 CHANGELOG 里写。
+
 ## 0.10.3 — 2026-11-03
 
 发布流水线的两件收尾。插件功能没有变化——这一版自己就是流水线的验收样本。
