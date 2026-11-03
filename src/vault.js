@@ -301,9 +301,19 @@ export function createVault(cfg, redactor) {
 
   /* ------------------------------------------------------------ episodes */
 
+  /**
+   * Append one episode to the day it happened.
+   *
+   * The date in the filename is the record's own `t`, not "now": a backfilled
+   * session from last month belongs in last month's file, or the vault listing
+   * would claim that three months of history happened today. A record without a
+   * parseable timestamp falls back to today.
+   */
   async function appendEpisode(record) {
     await ensure()
-    const file = path.join(P.episodes, `${today()}.jsonl`)
+    const stamp = typeof record?.t === 'string' ? record.t.slice(0, 10) : ''
+    const day = /^\d{4}-\d{2}-\d{2}$/.test(stamp) ? stamp : today()
+    const file = path.join(P.episodes, `${day}.jsonl`)
     const line = `${JSON.stringify(record)}\n`
     await withLock(`episode:${file}`, () => fsp.appendFile(file, line, 'utf8'))
     // Keep projects.json honest even before the first card is distilled.
@@ -402,7 +412,7 @@ export function createVault(cfg, redactor) {
     return {
       id: data.id,
       kind: data.kind ?? 'note',
-      title: data.title ?? '(untitled)',
+      title: data.title ?? '（无标题 untitled）',
       project: data.project ?? cfg.defaultProject,
       entities: Array.isArray(data.entities) ? data.entities : [],
       created: data.created ?? nowIso(),
@@ -503,15 +513,15 @@ export function createVault(cfg, redactor) {
         await touchProject(project)
         const why = duplicate.exact
           ? ''
-          : ` (near-duplicate ${duplicate.score.toFixed(2)} of "${String(input.title ?? '').trim()}")`
-        await audit('card', `re-confirmed ${existing.id} "${existing.title}"${why}`)
+          : ` （近似重复 near-duplicate ${duplicate.score.toFixed(2)}，对着 "${String(input.title ?? '').trim()}"）`
+        await audit('card', `再次确认 ${existing.id} "${existing.title}"${why}`)
         return { card: existing, deduped: true }
       }
 
       const card = {
         id: input.id ?? newCardId(),
         kind: CARD_KINDS.includes(input.kind) ? input.kind : 'note',
-        title: String(input.title ?? '').trim().slice(0, 160) || '(untitled)',
+        title: String(input.title ?? '').trim().slice(0, 160) || '（无标题 untitled）',
         project,
         entities: [...new Set((input.entities ?? []).map((e) => slugify(e)))].filter(Boolean),
         created: input.created ?? stamp,
@@ -538,10 +548,10 @@ export function createVault(cfg, redactor) {
         old.validTo = card.validFrom
         old.supersededBy = card.id
         await writeAtomic(cardPath(old), renderCard(old))
-        await audit('card', `${old.id} superseded by ${card.id}`)
+        await audit('card', `${old.id} 已被 ${card.id} 替换（superseded）`)
       }
 
-      await audit('card', `wrote ${card.id} [${card.kind}] "${card.title}" (${card.project})`)
+      await audit('card', `写入 ${card.id} [${card.kind}] "${card.title}" (${card.project})`)
       return { card, deduped: false }
     })
   }
@@ -552,10 +562,10 @@ export function createVault(cfg, redactor) {
       if (!card) return null
       card.status = 'retracted'
       card.validTo = card.validTo ?? today()
-      card.body = `${card.body}\n\n<!-- retracted: ${String(reason ?? 'no reason given').slice(0, 200)} -->`
+      card.body = `${card.body}\n\n<!-- 已撤回 retracted: ${String(reason ?? '没有给出原因 · no reason given').slice(0, 200)} -->`
       await writeAtomic(cardPath(card), renderCard(card))
       invalidate()
-      await audit('card', `retracted ${id}${reason ? ` (${reason})` : ''}`)
+      await audit('card', `已撤回 ${id}${reason ? ` (${reason})` : ''}`)
       return card
     })
   }
@@ -566,7 +576,7 @@ export function createVault(cfg, redactor) {
       if (!card) return false
       await fsp.rm(card.file, { force: true })
       invalidate()
-      await audit('card', `purged ${id}`)
+      await audit('card', `已彻底删除 ${id}（purged）`)
       return true
     })
   }

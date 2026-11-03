@@ -42,7 +42,11 @@ export function createDistillRunner(options) {
    */
   function run({ project, dryRun = false, signal } = {}) {
     if (inflight) {
-      return Promise.resolve({ ok: false, busy: true, reason: 'A distillation is already running.' })
+      return Promise.resolve({
+        ok: false,
+        busy: true,
+        reason: '已有一次蒸馏在跑，等它结束 · A distillation is already running.',
+      })
     }
 
     const task = (async () => {
@@ -66,7 +70,7 @@ export function createDistillRunner(options) {
           try {
             await refreshViews()
           } catch (error) {
-            log('warn', `distilled, but a vault view did not render: ${error?.message ?? error}`)
+            log('warn', `蒸馏完成了，但有一个记忆库视图没能渲染出来 · distilled, but a vault view did not render: ${error?.message ?? error}`)
           }
         }
         return {
@@ -85,7 +89,7 @@ export function createDistillRunner(options) {
           reason: report.reason ?? null,
         }
       } catch (error) {
-        log('warn', `distillation failed: ${error?.message ?? error}`)
+        log('warn', `蒸馏失败 · distillation failed: ${error?.message ?? error}`)
         return {
           ok: false,
           busy: false,

@@ -34,6 +34,7 @@
     "client.js",
     "src/*.js",
     "test/*.mjs",
+    "test/fixtures/*",
     "eval/*.mjs",
     "eval/questions.json",
     "eval/REPORT.md",
@@ -47,7 +48,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/smoke.mjs && node test/schema.mjs && node test/client.mjs && node test/capture.mjs && node test/tools.mjs && node test/extract.mjs && node test/graphdata.mjs && node test/page.mjs && node test/distillapi.mjs && node test/auto.mjs && node eval/run.mjs",
+    "test": "node test/smoke.mjs && node test/schema.mjs && node test/client.mjs && node test/capture.mjs && node test/tools.mjs && node test/extract.mjs && node test/graphdata.mjs && node test/page.mjs && node test/distillapi.mjs && node test/auto.mjs && node test/history.mjs && node eval/run.mjs",
     "eval": "node eval/run.mjs",
     "live": "node test/live.mjs",
     "live:supersede": "node test/live-supersede.mjs",
@@ -74,6 +75,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@deepseek-ai/schemastery": "~3.18.5"
+    "@deepseek-ai/schemastery": "~3.18.5",
+    "fzstd": "^0.1.1"
   }
 }

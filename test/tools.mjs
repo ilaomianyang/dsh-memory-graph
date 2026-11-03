@@ -57,8 +57,9 @@ async function call(name, args) {
 }
 
 /* ------------------------------------------------------------------ shape */
-check('registers the eight memory tools', () => {
+check('registers the nine memory tools', () => {
   assert.deepEqual([...byName.keys()].sort(), [
+    'memory_backfill',
     'memory_distill',
     'memory_forget',
     'memory_get',

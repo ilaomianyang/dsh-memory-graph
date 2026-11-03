@@ -22,14 +22,14 @@ function failure(error) {
 <style>body{font:14px/1.6 system-ui,sans-serif;margin:0;display:grid;place-items:center;height:100vh;color:#333}
 main{max-width:34rem;padding:2rem}code{background:#f4f4f5;padding:.1rem .3rem;border-radius:4px}</style>
 <main><h1>记忆图没能画出来</h1><p><code>${escaped}</code></p>
-<p>The graph could not be rendered. The vault is still on disk; nothing was written.</p></main></html>`
+<p>图谱渲染失败了，但记忆库还在磁盘上，什么都没写 · The graph could not be rendered. The vault is still on disk; nothing was written.</p></main></html>`
 }
 
 export function createPageHandler({ getVault }) {
   return async function fetch() {
     const vault = getVault()
     if (!vault || typeof vault.graphPage !== 'function') {
-      return html(failure(new Error('vault unavailable')), 500)
+      return html(failure(new Error('记忆库不可用 · vault unavailable')), 500)
     }
     try {
       return html(await vault.graphPage())

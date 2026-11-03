@@ -96,7 +96,7 @@ export function createAutoDistiller({ cfg, vault, run, log = () => {}, now = () 
       lastAttemptAt = Number.isFinite(attempt) && attempt > 0 ? attempt : null
       startedAt = Number.isFinite(start) && start > 0 ? start : null
     } catch (error) {
-      log('warn', `auto: could not read .auto-state.json: ${error?.message ?? error}`)
+      log('warn', `自动蒸馏：读不了 .auto-state.json · auto: could not read .auto-state.json: ${error?.message ?? error}`)
     }
   }
 
@@ -111,7 +111,7 @@ export function createAutoDistiller({ cfg, vault, run, log = () => {}, now = () 
       const batch = await vault.readUndistilled(Math.max(1, auto.minEpisodes ?? 0, cfg.extractor?.maxEpisodesPerRun ?? 40))
       pending = Array.isArray(batch) ? batch.length : 0
     } catch (error) {
-      log('warn', `auto: could not count undistilled episodes: ${error?.message ?? error}`)
+      log('warn', `自动蒸馏：数不了还没蒸馏的情节 · auto: could not count undistilled episodes: ${error?.message ?? error}`)
       return { due: false, rule: null, reason: 'the vault could not be read', ran: false }
     }
 
@@ -126,7 +126,7 @@ export function createAutoDistiller({ cfg, vault, run, log = () => {}, now = () 
       try {
         await vault.writeAutoState?.({ startedAt: at })
       } catch (error) {
-        log('warn', `auto: could not start the schedule clock: ${error?.message ?? error}`)
+        log('warn', `自动蒸馏：没能启动计划时钟 · auto: could not start the schedule clock: ${error?.message ?? error}`)
       }
     }
 
@@ -139,21 +139,24 @@ export function createAutoDistiller({ cfg, vault, run, log = () => {}, now = () 
     try {
       await vault.writeAutoState?.({ lastAttemptAt: at })
     } catch (error) {
-      log('warn', `auto: could not record the attempt: ${error?.message ?? error}`)
+      log('warn', `自动蒸馏：没能记下这次尝试 · auto: could not record the attempt: ${error?.message ?? error}`)
     }
 
     const report = await run({ project: auto.project ? String(auto.project) : undefined })
     lastReport = report
     if (report?.busy === true) {
-      log('info', 'auto: skipped, a distillation is already running')
+      log('info', '自动蒸馏：跳过，已经有一次蒸馏在跑 · auto: skipped, a distillation is already running')
     } else if (report?.ok === true) {
       log(
         'info',
-        `auto (${decision.rule}): read ${report.episodes} episode(s) → wrote ${report.written} card(s)` +
+        `自动蒸馏 auto (${decision.rule}): read ${report.episodes} episode(s) → wrote ${report.written} card(s)` +
           (report.model ? ` · ${report.model}` : ''),
       )
     } else {
-      log('warn', `auto (${decision.rule}): ${report?.message ?? report?.reason ?? 'did not run'}`)
+      log(
+        'warn',
+        `自动蒸馏 auto (${decision.rule}): ${report?.message ?? report?.reason ?? '没有运行 · did not run'}`,
+      )
     }
     return { ...decision, pending, ran: true, report }
   }

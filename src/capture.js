@@ -4,117 +4,24 @@
  * Deliberately model-free. Every turn is appended as it closes, so the "never
  * loses anything" guarantee holds even while the extractor is unconfigured,
  * offline, or out of quota. Distillation happens later and separately.
+ *
+ * What counts as a real message, how it is truncated and how it is redacted
+ * lives in `turns.js`, shared with the history importer — see the note there for
+ * why there is exactly one copy of that logic.
  */
-import { nowIso } from './vault.js'
+import { createTurnAssembler, projectOf } from './turns.js'
 
 const FLUSH_AFTER_MS = 90_000
-const MAX_ASSISTANT_PARTS = 6
-
-function collectText(node, depth = 0, seen = new Set(), out = []) {
-  if (node === null || node === undefined || depth > 4) return out
-  if (typeof node === 'string') return out
-  if (Array.isArray(node)) {
-    for (const item of node) collectText(item, depth + 1, seen, out)
-    return out
-  }
-  if (typeof node !== 'object') return out
-  if (seen.has(node)) return out
-  seen.add(node)
-
-  if (node.type === 'text' && typeof node.text === 'string') {
-    out.push(node.text)
-    return out
-  }
-  for (const key of ['content', 'message', 'text', 'parts', 'blocks']) {
-    if (key in node) collectText(node[key], depth + 1, seen, out)
-  }
-  return out
-}
-
-function eventText(event) {
-  const parts = collectText(event?.data)
-  return parts.join('\n').replace(/\n{3,}/g, '\n\n').trim()
-}
-
-function projectOf(session, fallback) {
-  const cwd = session?.header?.cwd ?? session?.meta?.cwd ?? session?.cwd
-  if (typeof cwd === 'string' && cwd.trim() !== '') {
-    // Both separators, whatever platform this is running on: the path comes from
-    // the session header, which may well have been written on the other OS.
-    const parts = cwd.replace(/[\\/]+$/, '').split(/[\\/]/)
-    const base = parts[parts.length - 1] ?? ''
-    if (base !== '') return base
-  }
-  return fallback
-}
-
-function truncate(text, max) {
-  const value = String(text ?? '').trim()
-  if (value.length <= max) return value
-  return `${value.slice(0, max)}…`
-}
 
 export function registerCapture(ctx, { cfg, vault, redactor }) {
-  const buffers = new Map()
+  const assembler = createTurnAssembler({ cfg, redactor })
   const disposers = []
   const timers = new Map()
 
-  // Both the switch and the skip list are editable while the plugin runs (they
-  // are `.volatile()` in the schema), so neither is baked in here: the switch is
-  // read per event, and the compiled rules are rebuilt only when the list's text
-  // actually changes — a `new RegExp` on every token would be pure waste.
-  let skipKey
-  let skipRules = []
-
-  function compiledSkipRules() {
-    const list = cfg.capture.skipPatterns ?? []
-    const key = list.join('\u0000')
-    if (key !== skipKey) {
-      skipKey = key
-      skipRules = list.flatMap((pattern) => {
-        try {
-          return [new RegExp(pattern, 'i')]
-        } catch {
-          return []
-        }
-      })
-    }
-    return skipRules
-  }
-
-  /** True when the "user" side is really a harness injection, not a person typing. */
-  const injected = (text) => text !== '' && compiledSkipRules().some((re) => re.test(text))
-
-  /**
-   * Delimited harness blocks come off before the patterns are consulted.
-   *
-   * They are the one kind of injection whose extent is knowable, so removing them
-   * keeps the person's own words when a real message happens to carry one — the
-   * alternative (dropping the whole message) loses the part that was worth
-   * keeping. Undelimited blocks (a runtime snapshot) are handled by the patterns.
-   */
-  function stripInjectedBlocks(text) {
-    return String(text ?? '')
-      .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, '')
-      .replace(/[ \t]+\n/g, '\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim()
-  }
-
   const idOf = (session) => String(session?.id ?? session?.header?.id ?? 'unknown')
 
-  function bufferOf(session) {
-    const id = idOf(session)
-    let buffer = buffers.get(id)
-    if (!buffer) {
-      buffer = { project: projectOf(session, cfg.defaultProject), user: '', assistant: [], tools: 0, turn: null }
-      buffers.set(id, buffer)
-    }
-    return { id, buffer }
-  }
-
   function drop(id) {
-    buffers.delete(id)
+    assembler.forget(id)
     const timer = timers.get(id)
     if (timer) {
       clearTimeout(timer)
@@ -123,33 +30,9 @@ export function registerCapture(ctx, { cfg, vault, redactor }) {
   }
 
   async function flush(id) {
-    const buffer = buffers.get(id)
-    if (!buffer) return
-    const toolCount = buffer.tools
-    const user = truncate(buffer.user, cfg.capture.userChars)
-    const assistant = truncate(buffer.assistant.join('\n'), cfg.capture.assistantChars)
-
-    // Every episode is anchored to something the user actually said. A turn with
-    // no user side is context noise, and one too short to mean anything — such as
-    // "ok" — would only fill the vault with lines the extractor cannot use.
-    if (user === '' || user.length + assistant.length < cfg.capture.minChars) {
-      drop(id)
-      return
-    }
-
+    const episode = assembler.flush(id)
     drop(id)
-
-    const redactedUser = redactor.redact(user).text
-    const redactedAssistant = redactor.redact(assistant).text
-    await vault.appendEpisode({
-      t: nowIso(),
-      project: buffer.project,
-      session: id,
-      turn: buffer.turn,
-      user: redactedUser,
-      assistant: redactedAssistant,
-      ...(cfg.capture.includeToolOutput && toolCount > 0 ? { tools: toolCount } : {}),
-    })
+    if (episode) await vault.appendEpisode(episode)
   }
 
   function schedule(id) {
@@ -164,65 +47,42 @@ export function registerCapture(ctx, { cfg, vault, redactor }) {
 
   disposers.push(
     ctx.on('session/event', (session, event) => {
-      // The switch is read here, not at registration: turning capture off in
-      // 设置 must stop writes immediately without unregistering the listener.
+      // The switch is read inside the assembler, per event: turning capture off
+      // in 设置 must stop writes immediately without unregistering the listener.
       if (!cfg.capture.enabled) return
 
+      const id = idOf(session)
+      const episodes = assembler.push({
+        sessionId: id,
+        project: projectOf(session, cfg.defaultProject),
+        event,
+      })
+
+      if (episodes.length > 0) {
+        for (const episode of episodes) {
+          vault.appendEpisode(episode).catch(() => {})
+        }
+      }
+
       const type = event?.type
+      const relevant =
+        type === 'turn/end' || type === 'user/message' || type === 'assistant/message' || type === 'tool/result'
+      if (!relevant) return
 
       // A turn is the natural write unit: flush it as soon as it closes, so an
-      // episode exists even if the next turn never comes.
+      // episode exists even if the next turn never comes. The timer is the safety
+      // net for a turn that never closes at all.
       if (type === 'turn/end') {
-        const id = idOf(session)
-        const buffer = buffers.get(id)
-        if (buffer) {
-          if (typeof event?.data?.turn === 'number') buffer.turn = event.data.turn
-          flush(id).catch(() => {})
+        const timer = timers.get(id)
+        if (timer) {
+          clearTimeout(timer)
+          timers.delete(id)
         }
+        assembler.forget(id)
         return
       }
 
-      if (type !== 'user/message' && type !== 'assistant/message' && type !== 'tool/result') return
-
-      if (type === 'user/message') {
-        // The harness delivers runtime snapshots, skill catalogs, sampled time,
-        // approval notices and compaction checkpoints through the same channel as
-        // the person typing — and not always with a telling `source.kind`: a real
-        // runtime snapshot has arrived here tagged `user` (it was captured as if
-        // the person had typed it). So provenance can only *add* a skip, never
-        // veto the patterns; both are consulted, and delimited blocks come off
-        // first so a message that merely carried a reminder keeps its own words.
-        const kind = event?.data?.source?.kind
-        const text = stripInjectedBlocks(eventText(event))
-        const synthetic = (typeof kind === 'string' && kind !== 'user') || text === '' || injected(text)
-        if (synthetic) return
-
-        const id = idOf(session)
-        const open = buffers.get(id)
-        if (open && (open.user !== '' || open.assistant.length > 0)) {
-          // A turn that never closed (interrupted, or an older harness): keep it.
-          flush(id).catch(() => {})
-        }
-
-        const { buffer } = bufferOf(session)
-        buffer.user = text
-        if (typeof event?.data?.turn === 'number') buffer.turn = event.data.turn
-        schedule(id)
-        return
-      }
-
-      const { id, buffer } = bufferOf(session)
-
-      if (type === 'assistant/message') {
-        const text = eventText(event)
-        if (text !== '' && buffer.assistant.length < MAX_ASSISTANT_PARTS) buffer.assistant.push(text)
-        if (typeof event?.data?.turn === 'number') buffer.turn = event.data.turn
-        schedule(id)
-        return
-      }
-
-      buffer.tools += 1
-      schedule(id)
+      if (assembler.isOpen(id)) schedule(id)
     }),
   )
 
@@ -231,7 +91,9 @@ export function registerCapture(ctx, { cfg, vault, redactor }) {
     () => {
       for (const timer of timers.values()) clearTimeout(timer)
       timers.clear()
-      for (const id of [...buffers.keys()]) flush(id).catch(() => {})
+      for (const episode of assembler.flushAll()) {
+        vault.appendEpisode(episode).catch(() => {})
+      }
     },
   ]
 }

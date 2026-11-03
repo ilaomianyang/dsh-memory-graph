@@ -462,7 +462,16 @@ export function createGraphHandler({ getVault, getConfig }) {
   return async function handle(request) {
     const url = new URL(request.url)
     const session = url.searchParams.get('session') ?? ''
-    if (session === '') return json({ ok: false, reason: 'missing-session' }, 400)
+    if (session === '') {
+      return json(
+        {
+          ok: false,
+          reason: 'missing-session',
+          message: '这个会话没有 id，画不出它的记忆图 · this session has no id, so there is no graph to draw',
+        },
+        400,
+      )
+    }
     try {
       const cfg = getConfig()
       const vault = getVault()

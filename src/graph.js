@@ -143,7 +143,7 @@ function buildModel({ cards, entities, projects }) {
       key: `c:${card.id}`,
       type: 'card',
       kind: String(card.kind ?? 'note'),
-      label: String(card.title ?? '(untitled)'),
+      label: String(card.title ?? '（无标题 untitled）'),
       id: card.id,
       project: card.project ?? 'shared',
       status: card.status ?? 'active',
@@ -843,7 +843,7 @@ const BODY = `
         <button id="theme" title="主题：跟随系统 / 深色 / 浅色">◐</button>
         <button id="zoom-in" title="放大">+</button>
         <button id="zoom-out" title="缩小">−</button>
-        <button id="zoom-fit" title="复位 (f)">fit</button>
+        <button id="zoom-fit" title="复位 (f)">复位</button>
       </div>
     </div>
   </header>
@@ -907,6 +907,11 @@ function clientScript(dataJson) {
   var selected = null;
   var view = { k: 1, x: 0, y: 0 };
   var GRADIENT_KINDS = ['decision', 'fact', 'open_question', 'preference', 'note', 'entity'];
+  var CONFIDENCE_LABELS = {
+    user_stated: '用户明说 user_stated',
+    verified: '已验证 verified',
+    inferred: '推断 inferred'
+  };
 
   /* ------------------------------------------------------------ theme */
 
@@ -1167,7 +1172,7 @@ function clientScript(dataJson) {
     if (node.type === 'entity') {
       var cards = Object.keys(neighbors[node.key]).filter(function (key) { return key.indexOf('c:') === 0; });
       tooltip.appendChild(h('div', 'tt-snip', cards.length + ' 张卡片 · ' + (node.projects.length ? node.projects.join(' / ') : '未归档')));
-      tooltip.appendChild(h('div', 'tt-meta', 'first ' + (node.firstSeen || '—') + ' · last ' + (node.lastSeen || '—')));
+      tooltip.appendChild(h('div', 'tt-meta', '首次 ' + (node.firstSeen || '—') + ' · 最近 ' + (node.lastSeen || '—')));
     } else {
       if (node.snippet) tooltip.appendChild(h('div', 'tt-snip', node.snippet));
       tooltip.appendChild(h('div', 'tt-meta', node.id + ' · ' + node.project + ' · ' + node.created));
@@ -1273,7 +1278,7 @@ function clientScript(dataJson) {
     if (node.status !== 'active') {
       badges.appendChild(badge('warn', node.status === 'superseded' ? '已替换 superseded' : '已撤回 retracted', true));
     }
-    badges.appendChild(badge('plain', node.confidence, true));
+    badges.appendChild(badge('plain', CONFIDENCE_LABELS[node.confidence] || node.confidence, true));
     panel.appendChild(badges);
 
     var meta = h('dl');
@@ -1560,7 +1565,7 @@ export function renderGraphHtml({ cards = [], entities = [], projects = [], gene
     generatedAt: generatedAt || stamp(),
   })
   const dataJson = escapeForScript(JSON.stringify(payload))
-  const title = `记忆图 · ${payload.counts.cards} cards / ${payload.counts.entities} entities`
+  const title = `记忆图 · ${payload.counts.cards} 张卡片 / ${payload.counts.entities} 个实体`
 
   return `<!doctype html>
 <html lang="zh-CN">

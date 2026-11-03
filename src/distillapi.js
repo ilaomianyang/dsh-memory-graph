@@ -23,7 +23,10 @@ export function createDistillHandler({ getRunner }) {
   return async function handleDistill() {
     const runner = getRunner()
     if (typeof runner?.run !== 'function') {
-      return json({ ok: false, reason: 'unavailable', message: 'the distiller is not available' }, 500)
+      return json(
+        { ok: false, reason: 'unavailable', message: '蒸馏器不可用 · the distiller is not available' },
+        500,
+      )
     }
     return respond(await runner.run())
   }

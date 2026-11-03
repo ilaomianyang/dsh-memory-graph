@@ -121,7 +121,13 @@ function extractJson(text) {
 
 export function parseCards(text) {
   const parsed = extractJson(text)
-  if (parsed === null) return { cards: [], skipped: 'model output was not JSON', raw: String(text ?? '').slice(0, 600) }
+  if (parsed === null) {
+    return {
+      cards: [],
+      skipped: '模型输出不是 JSON · model output was not JSON',
+      raw: String(text ?? '').slice(0, 600),
+    }
+  }
   const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed.cards) ? parsed.cards : []
   const cards = []
   for (const raw of list) {
@@ -253,14 +259,16 @@ export function resolveRoute(cfg, selection) {
   if (!useCurrentModel) {
     if (!provider || !model) {
       throw new Error(
-        'extractor.useCurrentModel is off, so extractor.provider and extractor.model are both required.',
+        '关掉了 extractor.useCurrentModel，所以 extractor.provider 和 extractor.model 都必须填 · extractor.useCurrentModel is off, so extractor.provider and extractor.model are both required.',
       )
     }
     return { provider, model, effort: reasoningEffort, source: 'config extractor.provider/model' }
   }
   if (!selection?.provider || !selection?.model) {
     throw new Error(
-      'No model is selected in Settings → Models, so the extractor has no route to borrow. ' +
+      '设置 → 模型里没有选中任何模型，所以抽取器没有可借用的路由。' +
+        '在那里选一个模型，或者填好 extractor.provider 和 extractor.model 再把 extractor.useCurrentModel 关掉 · ' +
+        'No model is selected in Settings → Models, so the extractor has no route to borrow. ' +
         'Pick a model there, or set extractor.provider and extractor.model and turn extractor.useCurrentModel off.',
     )
   }
@@ -270,7 +278,7 @@ export function resolveRoute(cfg, selection) {
     // An explicit setting wins, so a big thinking budget can be reserved for
     // distillation without changing the model the conversation itself uses.
     effort: reasoningEffort || selectionEffort(selection),
-    source: 'Settings → Models selection',
+    source: '设置 → 模型里选中的路由 · Settings → Models selection',
   }
 }
 
@@ -293,7 +301,7 @@ function splitMessages(messages) {
 async function callHarnessModel(cfg, messages, { signal, llm, selection } = {}) {
   if (!llm || typeof llm.prepareCall !== 'function') {
     throw new Error(
-      'This harness build exposes no llm service to plugins, so set extractor.transport = "http" to post to an endpoint directly.',
+      '这个 harness 版本没有把 llm 服务暴露给插件，所以请把 extractor.transport 设成 "http"，直接向接口发请求 · This harness build exposes no llm service to plugins, so set extractor.transport = "http" to post to an endpoint directly.',
     )
   }
   const route = resolveRoute(cfg, selection)
@@ -339,26 +347,33 @@ async function callHarnessModel(cfg, messages, { signal, llm, selection } = {}) 
       if (controller.signal.aborted) {
         // Either the caller cancelled us or our own timer fired; say which,
         // because the fix is different (wait longer vs. run less work).
-        const why = signal?.aborted
+        const whyZh = signal?.aborted ? '在路由应答之前就被取消了' : `超时了 ${cfg.extractor.timeoutMs} ms`
+        const whyEn = signal?.aborted
           ? 'was cancelled before the route answered'
           : `timed out after ${cfg.extractor.timeoutMs} ms`
         throw new Error(
-          `Extractor call to ${route.provider}/${route.model} ${why}; raise extractor.timeoutMs or distill fewer episodes per run.`,
+          `抽取器调用 ${route.provider}/${route.model} 时${whyZh}；可以调大 extractor.timeoutMs，或者每次少蒸馏几条情节 · ` +
+            `Extractor call to ${route.provider}/${route.model} ${whyEn}; raise extractor.timeoutMs or distill fewer episodes per run.`,
         )
       }
       throw new Error(
-        `Extractor call failed on ${route.provider}/${route.model} (${failure.code ?? kind}): ${failure.message ?? 'the route ended the stream without a reason'}`,
+        `抽取器调用 ${route.provider}/${route.model} 失败（${failure.code ?? kind}）：${failure.message ?? '路由结束了流但没给原因'} · ` +
+          `Extractor call failed on ${route.provider}/${route.model} (${failure.code ?? kind}): ${failure.message ?? 'the route ended the stream without a reason'}`,
       )
     }
     if (kind === 'tool-calls') {
-      throw new Error('Extractor answered with a tool call instead of JSON. Try a different model for distillation.')
+      throw new Error(
+        '抽取器返回的是工具调用而不是 JSON，蒸馏时换一个模型试试 · Extractor answered with a tool call instead of JSON. Try a different model for distillation.',
+      )
     }
     if (kind === 'max-tokens') {
       throw truncated(
-        `Extractor output reached maxOutputTokens (${cfg.extractor.maxOutputTokens}); raise it or distill fewer episodes per run.`,
+        `抽取器输出撞到了 maxOutputTokens 上限（${cfg.extractor.maxOutputTokens}）；把它调大，或者每次少蒸馏几条情节 · Extractor output reached maxOutputTokens (${cfg.extractor.maxOutputTokens}); raise it or distill fewer episodes per run.`,
       )
     }
-    if (text.trim() === '') throw new Error('Extractor returned an empty completion.')
+    if (text.trim() === '') {
+      throw new Error('抽取器返回了空回复 · Extractor returned an empty completion.')
+    }
     return {
       content: text,
       usage,
@@ -377,7 +392,7 @@ export async function callHttpModel(cfg, messages, { signal } = {}) {
   if (key === '') {
     const where = looked.length > 0 ? looked.join(' or ') : 'config extractor.apiKey'
     throw new Error(
-      `No API key for the extractor. Looked in ${where}. Set the env var, add the name to the harness credential store, or set config extractor.apiKey.`,
+      `抽取器没有可用的 API key，找过这些地方：${where}。请设置该环境变量、把名字加进 harness 的凭据库，或者直接填 config extractor.apiKey · No API key for the extractor. Looked in ${where}. Set the env var, add the name to the harness credential store, or set config extractor.apiKey.`,
     )
   }
   const url = `${cfg.extractor.baseUrl}${cfg.extractor.path}`
@@ -406,13 +421,17 @@ export async function callHttpModel(cfg, messages, { signal } = {}) {
       text = await response.text()
     }
     if (!response.ok) {
-      throw new Error(`Extractor HTTP ${response.status} from ${url}: ${text.slice(0, 400)}`)
+      throw new Error(
+        `抽取器请求 ${url} 返回 HTTP ${response.status}：${text.slice(0, 400)} · Extractor HTTP ${response.status} from ${url}: ${text.slice(0, 400)}`,
+      )
     }
     let data
     try {
       data = JSON.parse(text)
     } catch {
-      throw new Error(`Extractor returned non-JSON response: ${text.slice(0, 300)}`)
+      throw new Error(
+        `抽取器返回的不是 JSON：${text.slice(0, 300)} · Extractor returned non-JSON response: ${text.slice(0, 300)}`,
+      )
     }
     const content =
       data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? data?.output_text ?? ''
@@ -420,11 +439,11 @@ export async function callHttpModel(cfg, messages, { signal } = {}) {
       // Same situation as the harness route's max-tokens finish: the answer is
       // cut off mid-JSON, so ask for less instead of blaming the parser.
       throw truncated(
-        `Extractor output reached maxOutputTokens (${cfg.extractor.maxOutputTokens}); raise it or distill fewer episodes per run.`,
+        `抽取器输出撞到了 maxOutputTokens 上限（${cfg.extractor.maxOutputTokens}）；把它调大，或者每次少蒸馏几条情节 · Extractor output reached maxOutputTokens (${cfg.extractor.maxOutputTokens}); raise it or distill fewer episodes per run.`,
       )
     }
     if (typeof content !== 'string' || content.trim() === '') {
-      throw new Error('Extractor returned an empty completion.')
+      throw new Error('抽取器返回了空回复 · Extractor returned an empty completion.')
     }
     return { content, usage: data?.usage ?? null, model: data?.model ?? cfg.extractor.model, keySource: source }
   } finally {
@@ -496,13 +515,18 @@ export async function distill({ cfg, vault, redactor, project, dryRun = false, s
     return {
       ok: false,
       reason:
-        'Extractor is disabled. Set config extractor.enabled = true; the default transport reuses the model selected in Settings → Models.',
+        '抽取器没有启用。请把 config extractor.enabled 设成 true；默认传输方式会复用「设置 → 模型」里选中的模型 · Extractor is disabled. Set config extractor.enabled = true; the default transport reuses the model selected in Settings → Models.',
     }
   }
 
   const entries = await vault.readUndistilled(cfg.extractor.maxEpisodesPerRun)
   if (entries.length === 0) {
-    return { ok: true, episodes: 0, written: 0, reason: 'Every episode has already been distilled.' }
+    return {
+      ok: true,
+      episodes: 0,
+      written: 0,
+      reason: '所有情节都已经蒸馏过了 · Every episode has already been distilled.',
+    }
   }
 
   const known = await vault.listCards({ includeRetracted: true })

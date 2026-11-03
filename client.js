@@ -195,7 +195,7 @@ const SECTIONS = [
         path: ['extractor', 'provider'],
         type: 'text',
         placeholder: 'deepseek / wb / agy-local',
-        label: t('provider', 'provider'),
+        label: t('模型提供方 provider', 'provider'),
         hint: t('只有关掉"跟随当前模型"才需要。', 'Only needed when "follow the current model" is off.'),
         visible: (value) =>
           getPath(value, ['extractor', 'transport']) === 'harness' && getPath(value, ['extractor', 'useCurrentModel']) === false,

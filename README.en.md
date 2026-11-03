@@ -267,10 +267,31 @@ Point 3 means that if the key is already configured for the harness (`DEEPSEEK_A
 | `memory_forget` | `retract` (keeps the trace) or `purge` (deletes the file) |
 | `memory_distill` | turn raw episodes into cards with the extractor model |
 | `memory_stats` | vault location, counts, last distillation |
+| `memory_backfill` | import the sessions from **before the plugin was installed** (re-runnable; known turns are skipped) |
 
 `memory_graph` is the "neuron" part made concrete: an edge is not invented, it is **two cards mentioning the same entity**. It claims co-mention, never causation — the model decides what that means.
 
 **Nothing is injected automatically.** Memory only enters the context when the model asks for it. Most turns do not need long-term memory, and injecting it would be pure cost.
+
+## Past sessions count too
+
+Capture only sees conversations that happen **while the host is running**, so a freshly installed vault starts empty: the dozens of sessions before it will never appear on their own. `memory_backfill` fills that gap by replaying the session files on disk (`~/.dsh/sessions/<project>/<session>/session.v4.jsonl.zstd`) into episodes of **the same shape** live capture writes.
+
+- **Same filter, one implementation**: `<system-reminder>` blocks stripped, runtime snapshots (runtime context, compaction checkpoints) never counted as something a person said, length caps, redaction — all shared with live capture through `src/turns.js`, so the two paths cannot quietly diverge.
+- **The original timestamp**: `t` comes from the turn in the log, and the episode lands in **its own** `episodes/YYYY-MM-DD.jsonl` rather than piling up under today.
+- **Safe to run twice**: a turn is identified by `(session, turn)` and skipped when the vault already has it, so re-running after a session grew imports only the new part. Reinstalls, new machines and late installs are all the same command.
+- **Dry run by default** (`dryRun`): see the numbers before anything is written.
+
+In one line:
+
+```text
+memory_backfill {dryRun: true}     → 133 sessions scanned / 2078 episodes would be written
+memory_backfill {dryRun: false}    → 2078 episodes written; 85 already present, skipped
+```
+
+What lands is **episodes**, not cards: distil once (`memory_distill`, the Settings button, or the daily auto run at 40 episodes a batch) and they enter the retrieval layer. Two thousand episodes is fifty model batches — that is a spend worth deciding on deliberately.
+
+A session file is a **concatenated zstd container** (one frame per appended batch), so reading it means cutting it frame by frame — `src/history.js` carries a scanner equivalent to the one the harness itself uses.
 
 ## Look at your memory
 
@@ -383,7 +404,7 @@ Side benefit: an injected message no longer cuts a turn in half, so an episode's
 No network, no real vault:
 
 ```bash
-npm test        # 43 + 13 + 35 + 12 + 22 + 54 + 15 + 8 + 11 + 19 = 232 checks, plus the 25-question retrieval eval
+npm test        # 43 + 13 + 35 + 12 + 22 + 54 + 15 + 8 + 11 + 19 + 12 = 244 checks, plus the 25-question retrieval eval
 npm run eval    # retrieval eval only (offline, deterministic)
 ```
 
@@ -392,7 +413,7 @@ npm run eval    # retrieval eval only (offline, deterministic)
 - `test/client.mjs` — mounts the page on a minimal React stand-in: the controls drawn equal the fields that should show, switching `transport` reveals the http knobs, an empty inline key is never sent as a deletion, an out-of-range number never reaches the wire, a refused save clears the drafts and explains itself, restore sends `unset` rather than `set`, a value that merely repeats the inherited default is not badged as a customisation, the stylesheet is a single `<style>` tagged with the package name, and `client.js` contains no `export`/`import` (the loader evaluates it as a script). It then evaluates `client.js` in a fake page carrying `window.__ModuleLoader__` and walks the real browser path — factory, `apply`, both slot registrations — checking that `react` is the only module required, the registration id is the package name, the orders are 25 and 30, and the labels follow the page language. Finally it drives the **Memory tab**: one request per paint carrying this `sessionId`, every node and edge the host sent drawn, a click opening the card's title and body in the side panel, and both the empty session and the failing route explaining themselves instead of going blank. It also checks the **sidebar entry + main panel**: one rail entry and one page keyed by the same id, the action bar a sibling of the scroll box rather than a sticky child of it, the panel embedding the served route instead of a second renderer, and no vault path in the `src`
 - `test/graphdata.mjs` — the Memory tab's data: episodes filtered by `session`, majority project, the recall query taking the newest turns, a deterministic layout inside the box, every edge pointing at a node that exists, a cross-project card arriving through a shared entity, the caps reporting that they held, no assistant text in the payload, and the route answering 400 / 200 / 500 for missing session, normal, and a broken vault
 - `test/capture.mjs` — drives the capture listener with real `session/event` shapes, including injected context
-- `test/tools.mjs` — runs `execute` + `render` for all eight tools
+- `test/tools.mjs` — runs `execute` + `render` for all nine tools
 - `test/page.mjs` — the route behind the sidebar panel: `/api/memory-graph.page` sits on the authenticated channel, an empty vault still answers with a page, it is **the same renderer as the `graph.html` on disk** (only the timestamp differs), `X-Frame-Options: SAMEORIGIN` so only the app can frame it, a broken vault prints the reason on the page (escaped), no vault at all is a 500 rather than a crash, and no vault path ever appears in the bytes
 - `test/distillapi.mjs` — the Distill now door: `/api/memory-graph.distill` on the authenticated `/api` channel, running the same `distill()` (live vault, the model selected in Settings, the live redaction rules), one press is one run, a concurrent second press is refused instead of queued, an extractor refusal is a 200 and not a 500, a throw is a 500 with the lock still released, views are re-rendered only when cards were written, a render failure only warns, the card list is capped at 40, and a route with no runner answers 500 instead of throwing at the browser
 - `test/auto.mjs` — the automatic distiller: each rule fires on its own, whichever matches first runs when both are on, the minimum gap is checked before the rules, a quiet window may cross midnight, a tick only decides (an off switch does not even read the vault), one tick is at most one run, the gap is armed before the call, a restart reads `.auto-state.json` instead of starting over, a run that wrote nothing still arms the gap, an in-flight run is not stacked on, failures are logged with their reason, the project reaches the run, an unreadable vault is a skip and not a crash, and the tick asks for enough episodes to see the threshold
@@ -422,7 +443,7 @@ The tag triggers `.github/workflows/publish.yml`, which does four things:
 
 1. checks that the tag and `package.json` agree — a mismatch fails instead of publishing a package whose version lies;
 2. checks whether that version is already on the registry — if so it skips, so re-running a tag is a no-op rather than an error;
-3. `npm publish --provenance --access public` (`prepublishOnly` runs the 232 checks again; a red build cannot reach the registry);
+3. `npm publish --provenance --access public` (`prepublishOnly` runs the 244 checks again; a red build cannot reach the registry);
 4. adds "Built and signed on GitHub Actions" to the npm page, proving the tarball came from this commit of this repository.
 
 Two ways to authenticate; the workflow accepts both (it uses `NPM_TOKEN` when the secret exists and falls back to OIDC when it does not):

@@ -1,5 +1,5 @@
 /**
- * The model-facing surface. Seven small tools, all explicit.
+ * The model-facing surface. Eight small tools, all explicit.
  *
  * Nothing here runs on its own: retrieval only happens when the agent decides
  * to ask, which keeps memory out of the context (and out of the attention
@@ -8,6 +8,7 @@
 import path from 'node:path'
 import { searchCards, timelineCards } from './search.js'
 import { distill, extractorServices, resolveRoute } from './extract.js'
+import { runBackfill, defaultSessionsDir } from './history.js'
 import { CARD_KINDS, CONFIDENCE, slugify } from './vault.js'
 
 const OUTPUT_SCHEMA = { type: 'object', additionalProperties: true }
@@ -526,6 +527,56 @@ export function registerTools(ctx, { cfg, vault, redactor, runner = null }) {
           `views: README.md and graph.html in the vault root (open the HTML directly, no server needed)`,
         ].join('\n')
         return { ...stats, text }
+      },
+    }),
+  )
+
+  /* --------------------------------------------------------------- backfill */
+  disposers.push(
+    ctx.tools.register({
+      name: 'memory_backfill',
+      description:
+        '把「安装插件之前的」会话历史一次性导入记忆库。采集只在宿主运行时看得见当轮对话，所以新装的记忆库一开始是空的；这个工具回放磁盘上的历史会话文件（~/.dsh/sessions 下的 session.v4.jsonl.zstd），走的是与实时采集完全相同的过滤与脱敏逻辑，因此回填出来的情节和实时采集的是同一种记录。可重复执行：已经导入过的轮次会跳过，只补新的部分；时间戳用会话文件里的原始时间，所以历史落在时间轴的正确位置。默认只统计不写库（dryRun），确认后再真正导入。',
+      parameters: {
+        type: 'object',
+        properties: {
+          dryRun: { type: 'boolean', description: '只统计会导入多少条，不写库。默认 true。' },
+          limit: { type: 'integer', minimum: 0, description: '最多回填多少个会话，按最近修改时间优先。0 = 全部。默认 0。' },
+          sessionsDir: {
+            type: 'string',
+            description: '会话存储目录。省略则用环境变量 DSH_HOME 下的 sessions，再退到 ~/.dsh/sessions。',
+          },
+        },
+        additionalProperties: false,
+      },
+      output: { schema: OUTPUT_SCHEMA, render: (args, value) => json(args, value.text ?? value) },
+      async execute(args) {
+        const dryRun = args.dryRun !== false
+        const report = await runBackfill({
+          cfg,
+          vault,
+          redactor,
+          dir: args.sessionsDir ?? defaultSessionsDir(),
+          limit: args.limit ?? 0,
+          dryRun,
+        })
+
+        const lines = [
+          `${dryRun ? '试运行' : '已导入'}：会话目录 ${report.dir}（解码器 ${report.decoder}）`,
+          `扫描 ${report.scanned} / 共找到 ${report.found} 个会话，用时 ${(report.ms / 1000).toFixed(1)}s`,
+          `${dryRun ? '将写入' : '已写入'} ${report.imported} 条情节；已存在跳过 ${report.duplicates} 条${report.malformed > 0 ? `；坏行 ${report.malformed} 条` : ''}${report.failed > 0 ? `；读不了 ${report.failed} 个会话` : ''}`,
+        ]
+        if (report.exhausted) lines.push('达到单次读取上限，剩下的会话下次再跑即可（已导入的会自动跳过）。')
+        if (report.sessions.length > 0) {
+          lines.push('贡献最多的会话：')
+          for (const session of report.sessions.slice(0, 5)) {
+            lines.push(`  ${session.id}  ${session.project}  ${session.episodes} 条${session.duplicates > 0 ? `（跳过 ${session.duplicates}）` : ''}`)
+          }
+        }
+        if (report.imported > 0 && !dryRun) {
+          lines.push('这些情节还没有变成卡片：蒸馏一次（memory_distill 或设置页的「蒸馏一次」）才会进入检索层。')
+        }
+        return { ...report, text: lines.join('\n') }
       },
     }),
   )
