@@ -27,6 +27,7 @@ import { registerTools } from './src/tools.js'
 import { registerCapture } from './src/capture.js'
 import { createGraphHandler, GRAPH_PATH } from './src/graphdata.js'
 import { createDistillHandler, DISTILL_PATH } from './src/distillapi.js'
+import { createPageHandler, PAGE_PATH } from './src/pageapi.js'
 import { createDistillRunner } from './src/distillrun.js'
 import { createAutoDistiller, registerAutoDistill } from './src/auto.js'
 import { extractorServices } from './src/extract.js'
@@ -212,9 +213,17 @@ export function apply(ctx, config) {
         requestBody: 'buffered',
         fetch: createDistillHandler({ getRunner: () => runner }),
       })
-      log('info', `session memory view served at ${GRAPH_PATH}, distill at ${DISTILL_PATH}`)
+      // The whole-vault graph, as the page the sidebar panel embeds. GET only and
+      // read-only: it renders from cards already on disk and writes nothing.
+      const disposePage = registry.register({
+        path: PAGE_PATH,
+        methods: ['GET'],
+        requestBody: 'buffered',
+        fetch: createPageHandler({ getVault: () => vault }),
+      })
+      log('info', `session memory view served at ${GRAPH_PATH}, distill at ${DISTILL_PATH}, vault graph page at ${PAGE_PATH}`)
       return () => {
-        for (const dispose of [disposeRoute, disposeDistill]) {
+        for (const dispose of [disposeRoute, disposeDistill, disposePage]) {
           try {
             dispose?.()
           } catch {

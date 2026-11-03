@@ -28,6 +28,12 @@ const STYLE_ID = 'dsh-memory-graph-settings-css'
 const GRAPH_VIEW_ID = 'memory-graph'
 const GRAPH_API = '/api/memory-graph.graph'
 const DISTILL_API = '/api/memory-graph.distill'
+/**
+ * The sidebar entry and the main page behind it. One id for both: the panel list
+ * names the entry, `main` is keyed by it, and the shell joins them by that string.
+ */
+const PANEL_ID = 'memory-graph'
+const PAGE_API = '/api/memory-graph.page'
 
 const ZH = (() => {
   try {
@@ -732,6 +738,25 @@ const CSS = `
   cursor: pointer;
 }
 .mg-btn-ghost:disabled { opacity: 0.55; cursor: default; }
+/* The whole-vault panel: a bar, then the served page filling the rest. */
+.mgv-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.mgv-panel-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.08));
+  flex: 0 0 auto;
+}
+.mgv-panel-title { font-size: 12.5px; font-weight: 600; }
+.mgv-panel-spacer { flex: 1 1 auto; }
+.mgv-panel-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--dsw-alias-bg-l1, #fff);
+}
 .mgv-root { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 0; }
 .mgv-head {
   display: flex;
@@ -1760,6 +1785,67 @@ function createGraphView(ctx, React) {
  * which order, and that a fresh id is used rather than a shipped one (reusing
  * `chat` or `trajectory` would replace that cell instead of adding one).
  */
+/**
+ * The sidebar rail glyph: one node with three neighbours, drawn at the size the
+ * rail asks for.
+ */
+function createGraphIcon(React) {
+  const h = React.createElement
+  const stroke = { stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round' }
+  return function MemoryGraphIcon(props) {
+    const size = typeof props?.size === 'number' ? props.size : 18
+    return h(
+      'svg',
+      { width: size, height: size, viewBox: '0 0 20 20', fill: 'none', 'aria-hidden': 'true' },
+      h('path', { d: 'M10 11.6 5.2 11M10 11.6 14.8 11M10 9.2V4.7', ...stroke }),
+      h('circle', { cx: 10, cy: 11.6, r: 2.3, ...stroke }),
+      h('circle', { cx: 5.2, cy: 11, r: 1.5, ...stroke }),
+      h('circle', { cx: 14.8, cy: 11, r: 1.5, ...stroke }),
+      h('circle', { cx: 10, cy: 3.9, r: 1.5, ...stroke }),
+    )
+  }
+}
+
+/**
+ * The whole-vault panel: the graph you would otherwise open from the vault folder,
+ * inside the app.
+ *
+ * It does not redraw the graph in React. `graph.html` already is the whole-vault
+ * renderer — search, project filter, hover cards, dark mode — and a second
+ * implementation here would be a second thing to keep in step with the vault. So
+ * the panel embeds the page the host serves at PAGE_API, which is the same bytes
+ * as the file on disk: one renderer, nothing to drift.
+ */
+function createVaultPanel(React) {
+  const h = React.createElement
+  return function VaultGraphPanel() {
+    // The iframe is the cache: a new query string is how it reloads.
+    const [nonce, setNonce] = React.useState(0)
+    const src = nonce === 0 ? PAGE_API : `${PAGE_API}?v=${nonce}`
+    return h(
+      'div',
+      { className: 'mgv-panel' },
+      h(
+        'div',
+        { className: 'mgv-panel-bar' },
+        h('span', { className: 'mgv-panel-title' }, t('整个记忆库', 'The whole vault')),
+        h('span', { className: 'mgv-panel-spacer' }),
+        h(
+          'button',
+          { type: 'button', className: 'mg-btn', onClick: () => setNonce((n) => n + 1) },
+          t('刷新', 'Refresh'),
+        ),
+        h(
+          'a',
+          { className: 'mg-btn', href: PAGE_API, target: '_blank', rel: 'noreferrer' },
+          t('新窗口打开', 'Open in a window'),
+        ),
+      ),
+      h('iframe', { className: 'mgv-panel-frame', src, title: t('记忆图', 'Memory graph') }),
+    )
+  }
+}
+
 function registerSlots(ctx, React) {
   ensureStyle()
   const Page = createPage(ctx, React)
@@ -1791,13 +1877,33 @@ function registerSlots(ctx, React) {
       SessionMemoryView,
     ),
   )
+
+  // An entry of its own in the sidebar rail, and the page behind it. The tab above
+  // answers "what did THIS conversation remember"; this answers "everything I have
+  // ever remembered", which is a different question and was until now only reachable
+  // by opening graph.html from the vault folder.
+  const VaultPanel = createVaultPanel(React)
+  const VaultIcon = createGraphIcon(React)
+  ctx.slots.inject('sidebar.panellist', () =>
+    ctx.slots.register(
+      {
+        name: 'sidebar.panellist',
+        id: PANEL_ID,
+        // 20 is 上下文洞察: this sits right after it.
+        order: 30,
+        label: () => t('记忆图谱', 'Memory Graph'),
+      },
+      VaultIcon,
+    ),
+  )
+  ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: PANEL_ID }, VaultPanel))
 }
 
 if (typeof window === 'undefined' || !window.__ModuleLoader__ || typeof window.__ModuleLoader__.load !== 'function') {
   // Plain Node import (tests, schema tooling): publish what the suite needs and
   // touch nothing else. Headless by design — no document, no styles.
   globalThis.__memoryGraphFormSpec = FORM_SPEC
-  globalThis.__memoryGraphClient = { FORM_SPEC, createPage, createGraphView, registerSlots, ensureStyle, PACKAGE_NAME, HOST_ENTRY_ID, STYLE_ID, GRAPH_API, DISTILL_API, GRAPH_VIEW_ID }
+  globalThis.__memoryGraphClient = { FORM_SPEC, createPage, createGraphView, createVaultPanel, registerSlots, ensureStyle, PACKAGE_NAME, HOST_ENTRY_ID, STYLE_ID, GRAPH_API, DISTILL_API, PAGE_API, GRAPH_VIEW_ID, PANEL_ID }
 } else {
   window.__ModuleLoader__.load({
     id: PACKAGE_NAME,
@@ -1823,6 +1929,8 @@ if (typeof window === 'undefined' || !window.__ModuleLoader__ || typeof window._
       exports.GRAPH_API = GRAPH_API
       exports.DISTILL_API = DISTILL_API
       exports.GRAPH_VIEW_ID = GRAPH_VIEW_ID
+      exports.PAGE_API = PAGE_API
+      exports.PANEL_ID = PANEL_ID
       return module.exports
     },
   })

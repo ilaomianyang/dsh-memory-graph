@@ -735,16 +735,32 @@ export function createVault(cfg, redactor) {
   }
 
   /**
-   * Write the single-file graph view next to the README. Same inputs as the
-   * readme, plus the retracted cards — the graph shows them faded rather than
-   * dropping them, because "this was retracted" is itself a memory.
+   * The single-file graph page, as a string.
+   *
+   * `regenerateGraph` writes it to disk for people who open the file directly;
+   * this returns the same bytes to the route that embeds it in the app panel. One
+   * renderer, so the panel and the file can never disagree.
    */
-  async function regenerateGraph() {
+  async function buildGraph() {
     await ensure()
     const cards = await listCards({ includeRetracted: true })
     const entities = await listEntities()
     const projects = await listProjects()
     const html = renderGraphHtml({ cards, entities, projects, generatedAt: nowIso() })
+    return { html, cards, entities, projects }
+  }
+
+  async function graphPage() {
+    return (await buildGraph()).html
+  }
+
+  /**
+   * Write the single-file graph view next to the README. Same inputs as the
+   * readme, plus the retracted cards — the graph shows them faded rather than
+   * dropping them, because "this was retracted" is itself a memory.
+   */
+  async function regenerateGraph() {
+    const { html, cards, entities } = await buildGraph()
     await writeAtomic(P.graph, html)
     return {
       file: P.graph,
@@ -866,6 +882,7 @@ export function createVault(cfg, redactor) {
     touchProject,
     regenerateReadme,
     regenerateGraph,
+    graphPage,
     stats,
   }
 }

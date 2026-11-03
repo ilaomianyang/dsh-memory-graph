@@ -722,7 +722,7 @@ await check('the browser entry registers a module the loader can address', async
 await check('applying it contributes the Memory Graph page to Settings', async () => {
   const bundle = await openBrowserBundle()
   bundle.exports.apply(bundle.ctx)
-  assert.deepEqual([...bundle.injected], ['settings.section', 'conversation.view'], 'it waits for both slots')
+  assert.deepEqual([...bundle.injected], ['settings.section', 'conversation.view', 'sidebar.panellist', 'main'], 'it waits for every slot it fills')
   const sections = bundle.sections.filter((entry) => entry.spec.name === 'settings.section')
   assert.equal(sections.length, 1, 'exactly one section is registered')
   const [{ spec, Component }] = sections
@@ -740,6 +740,38 @@ await check('applying it contributes the Memory Graph page to Settings', async (
   view.unmount()
 })
 
+await check('the sidebar gets an entry of its own, and the main area a page behind it', async () => {
+  const bundle = await openBrowserBundle()
+  bundle.exports.apply(bundle.ctx)
+  const rail = bundle.sections.filter((entry) => entry.spec.name === 'sidebar.panellist')
+  assert.equal(rail.length, 1, 'one entry in the rail')
+  assert.equal(rail[0].spec.id, client.PANEL_ID)
+  // 20 is 上下文洞察: the whole-vault graph follows it.
+  assert.equal(rail[0].spec.order, 30)
+  assert.ok(typeof rail[0].spec.label === 'function', 'the label follows the UI language')
+  assert.ok(rail[0].spec.label().length > 0)
+  const page = bundle.sections.filter((entry) => entry.spec.name === 'main')
+  assert.equal(page.length, 1, 'one main page')
+  // The shell joins the rail entry to the page by this string, so it must be the
+  // same one on both sides.
+  assert.equal(page[0].spec.key, client.PANEL_ID)
+  assert.equal(client.PAGE_API, '/api/memory-graph.page')
+})
+
+await check('the panel embeds the served page instead of drawing a second graph', async () => {
+  const bundle = await openBrowserBundle()
+  bundle.exports.apply(bundle.ctx)
+  const [{ Component }] = bundle.sections.filter((entry) => entry.spec.name === 'main')
+  const view = mount(Component, bundle.runtime)
+  const frames = byClass(view.tree, 'mgv-panel-frame')
+  assert.equal(frames.length, 1, 'one frame')
+  assert.equal(frames[0].type, 'iframe')
+  // The vault directory never reaches the browser: the panel reads the host route.
+  assert.equal(frames[0].props.src, client.PAGE_API)
+  assert.equal(frames[0].props.src.includes('dsh-memory'), false, frames[0].props.src)
+  assert.equal(byClass(view.tree, 'mgv-panel-bar').length, 1, 'the bar carries the controls')
+  view.unmount()
+})
 await check('the sidebar label speaks whatever language the page is in', async () => {
   const navLabel = async (language) => {
     const bundle = await openBrowserBundle(language)
