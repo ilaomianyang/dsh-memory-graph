@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict'
 
 import { DISTILL_PATH, createDistillHandler } from '../src/distillapi.js'
+import { createDistillRunner } from '../src/distillrun.js'
 
 const results = []
 function check(name, fn) {
@@ -30,7 +31,7 @@ const body = async (response) => JSON.parse(await response.text())
 
 const makeHandler = (overrides = {}) => {
   const seen = []
-  const handler = createDistillHandler({
+  const runner = createDistillRunner({
     getVault: () => ({ name: 'vault' }),
     getConfig: () => ({ extractor: { enabled: true } }),
     getRedactor: () => ({ redact: (text) => text }),
@@ -41,7 +42,8 @@ const makeHandler = (overrides = {}) => {
     },
     ...overrides,
   })
-  return { handler, seen }
+  const handler = createDistillHandler({ getRunner: () => runner })
+  return { handler, seen, runner }
 }
 
 await check('the route sits on the authenticated /api channel like the graph one', () => {
@@ -60,7 +62,7 @@ await check('it runs the same distillation the tool runs, with the live vault an
   assert.equal(seen[0].llm, 'LLM', 'the harness transport service is passed through')
   assert.equal(seen[0].selection.provider, 'p', 'so the run uses the model selected in Settings')
   assert.equal(typeof seen[0].redactor.redact, 'function', 'and the live privacy rules')
-  assert.equal(seen[0].dryRun, undefined, 'a button press is a real run, not a rehearsal')
+  assert.equal(seen[0].dryRun, false, 'a button press is a real run, not a rehearsal')
 })
 
 await check('the answer is a report the panel can print', async () => {
@@ -176,6 +178,34 @@ await check('the card list is capped so a huge run cannot bloat the panel', asyn
   const report = await body(await handler())
   assert.equal(report.cards.length, 40)
   assert.equal(report.written, 120, 'the count is still the truth')
+})
+await check('the runner tells its callers when it is busy, so the ticker can stand down', async () => {
+  let release
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+  const { runner } = makeHandler({
+    distill: async () => {
+      await gate
+      return { ok: true, episodes: 1, written: 1 }
+    },
+  })
+  assert.equal(runner.busy(), false)
+  const running = runner.run({})
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.equal(runner.busy(), true, 'a run in flight is visible without asking it to start another')
+  release()
+  await running
+  assert.equal(runner.busy(), false, 'and it clears when the run settles')
+})
+
+await check('a route with no runner wired answers 500 instead of throwing at the browser', async () => {
+  const handler = createDistillHandler({ getRunner: () => null })
+  const response = await handler()
+  assert.equal(response.status, 500)
+  const report = await body(response)
+  assert.equal(report.ok, false)
+  assert.equal(report.reason, 'unavailable')
 })
 
 console.log(results.join('\n'))

@@ -300,6 +300,14 @@ const SERVED = {
     timeoutMs: 120000,
     maxEpisodesPerRun: 40,
   },
+  auto: {
+    enabled: false,
+    minEpisodes: 0,
+    everyMinutes: 0,
+    minGapMinutes: 30,
+    quietHours: '',
+    project: '',
+  },
   retrieval: { limit: 8, hops: 1, snippetChars: 320, timelineLimit: 20 },
 }
 
@@ -313,7 +321,7 @@ await check('the page renders every knob the served value makes visible', () => 
   try {
     const expected = visibleFields(SERVED)
     // The harness route hides the seven http-only knobs and the provider field.
-    assert.equal(expected.length, 21, `expected 21 visible fields, spec says ${expected.length}`)
+    assert.equal(expected.length, 27, `expected 27 visible fields, spec says ${expected.length}`)
     for (const field of expected) {
       const key = field.path.join('.')
       assert.ok(control(instance.tree, key), `${key} has no control on the page`)
@@ -327,12 +335,42 @@ await check('the page renders every knob the served value makes visible', () => 
   }
 })
 
-await check('the four sections are all there, each with a title', () => {
+await check('the five sections are all there, each with a title', () => {
   const instance = render(makeForm(clone(SERVED)))
   try {
     const titles = byClass(instance.tree, 'mg-card-t').map(text)
-    assert.equal(titles.length, 4)
+    assert.equal(titles.length, 5)
     for (const title of titles) assert.ok(title.length > 0)
+  } finally {
+    instance.unmount()
+  }
+})
+
+await check('the automatic distiller has both triggers on the page, each with its own switch', async () => {
+  const form = makeForm(clone(SERVED))
+  const instance = render(form)
+  try {
+    const section = spec.sections.find((s) => s.id === 'auto')
+    assert.ok(section, 'automatic distillation needs a section of its own, not a corner of another one')
+    assert.deepEqual(
+      section.fields.map((field) => field.path.join('.')),
+      ['auto.enabled', 'auto.minEpisodes', 'auto.everyMinutes', 'auto.minGapMinutes', 'auto.quietHours', 'auto.project'],
+    )
+    // Both rules show as 0 — "this rule is off" — rather than as a blank.
+    assert.equal(control(instance.tree, 'auto.minEpisodes').props.value, '0')
+    assert.equal(control(instance.tree, 'auto.everyMinutes').props.value, '0')
+    assert.equal(control(instance.tree, 'auto.enabled').props['data-on'], 'false')
+    // A rule set to 0 must reach the host as 0, not as "no value": 0 is how a
+    // rule is turned off, and an absent key would fall back to the default.
+    instance.act(() => control(instance.tree, 'auto.enabled').props.onClick())
+    instance.act(() => control(instance.tree, 'auto.minEpisodes').props.onChange({ target: { value: '12' } }))
+    instance.act(() => control(instance.tree, 'auto.quietHours').props.onChange({ target: { value: '23:00-08:00' } }))
+    instance.act(() => saveButton(instance.tree).props.onClick())
+    await instance.settle()
+    const byPath = new Map(form.calls[0].ops.map((op) => [op.path.join('.'), op]))
+    assert.equal(byPath.get('auto.enabled').value, true, 'turning it on is a write, not a default')
+    assert.equal(byPath.get('auto.minEpisodes').value, 12, 'the threshold is a number, not the string "12"')
+    assert.equal(byPath.get('auto.quietHours').value, '23:00-08:00')
   } finally {
     instance.unmount()
   }

@@ -155,12 +155,42 @@ One file is one memory. Append-only. No binaries, no lockfiles. Run `git init` i
 | `extractor.apiKeyEnv` | `MEMORY_LLM_API_KEY` | http mode: the key is looked up under this name | ✓ (http) |
 | `extractor.apiKey` | `''` | http mode: the key inline (not recommended, see below) | ✓ (http) |
 | `extractor.temperature` | `0.1` | http mode only: in harness mode sampling belongs to the borrowed route | ✓ (http) |
+| `auto.enabled` | `false` | switch automatic distillation on; off leaves only the button and the tool | ✓ |
+| `auto.minEpisodes` | `0` | run once this many undistilled episodes are waiting; 0 turns the rule off | ✓ |
+| `auto.everyMinutes` | `0` | run once this many minutes have passed; 0 turns the rule off | ✓ |
+| `auto.minGapMinutes` | `30` | shared by both rules: minimum gap between two automatic runs | ✓ |
+| `auto.quietHours` | `''` | window in which nothing runs (e.g. `23:00-08:00`, may cross midnight) | ✓ |
+| `auto.project` | `''` | project automatic cards are filed under | ✓ |
 | `retrieval.limit` | `8` | how many cards one search returns | ✓ |
 | `retrieval.hops` | `1` | entity expansion depth, `0` = keyword only | ✓ |
 | `retrieval.snippetChars` | `320` | how much of each hit the model gets to read | ✓ |
 | `retrieval.timelineLimit` | `20` | how far back `memory_timeline` looks by default | ✓ |
 
-Why only those 28 are editable there: the harness projects **only fields declared `volatile`** — the ones read each time they are used. Everything marked ✓ is read at call time, so one save changes the next call. `enabled` / `vaultDir` / `defaultProject` / `crossProject` are consumed during activation and would need a remount, so they are left out rather than shown as knobs that do nothing; the page's footer says exactly that.
+Why only those 34 are editable there: the harness projects **only fields declared `volatile`** — the ones read each time they are used. Everything marked ✓ is read at call time, so one save changes the next call. `enabled` / `vaultDir` / `defaultProject` / `crossProject` are consumed during activation and would need a remount, so they are left out rather than shown as knobs that do nothing; the page's footer says exactly that.
+
+### When it distils on its own: two rules
+
+By default it does **not**. With `auto.enabled` on, the plugin looks once a minute at whether a run is due — and that look is arithmetic only (how many episodes are waiting, how long since the last attempt, is this a quiet hour). **No model call, no cost.** Only a rule that matches starts a run, and it runs the same `distill()`.
+
+The two rules are independent: either one alone, or both.
+
+| Rule | Setting | Fires when |
+| --- | --- | --- |
+| Distil once enough pile up | `auto.minEpisodes` | undistilled episodes ≥ this number (say 10) |
+| Distil on a schedule | `auto.everyMinutes` | this many minutes have passed since the last automatic run (1440 = daily) |
+
+Three gates both rules share:
+
+- `auto.minGapMinutes` (default 30): never two automatic runs closer than this. It is checked before the rules — a vault that just crossed the threshold should not be asked again a minute later, and every ask costs money.
+- `auto.quietHours` (default empty): nothing runs inside this window; it may cross midnight (`23:00-08:00`). Unreadable text is ignored rather than silencing the feature forever.
+- `auto.project` (default empty): which project automatic cards are filed under; empty uses the newest episode's project.
+
+A few deliberate choices:
+
+- **The gap is armed before the call**, so a run that produced nothing still counts and will not be re-asked the next minute. It is recorded in `.auto-state.json` in the vault (`lastAttemptAt` only), so **a restart does not reset it**.
+- That file is not `.distill-state.json`: the latter is the **cursor** (which lines have been read), the former is the **attempt clock**. Merging them would make "read, but produced nothing" impossible to express.
+- Automatic runs, the button and `memory_distill` share **one lock**: while a run is in flight, the other callers are told so rather than queued, so two of them can never spend at once.
+- To stop it: `auto.enabled = false` (master switch), or set both rules to 0 (the switch stays on, no rule matches, nothing runs).
 
 ### One distillation runs in batches
 
@@ -302,16 +332,18 @@ Side benefit: an injected message no longer cuts a turn in half, so an episode's
 No network, no real vault:
 
 ```bash
-npm test        # 43 + 13 + 31 + 11 + 21 + 54 + 15 + 9 = 197 checks, plus the 25-question retrieval eval
+npm test        # 43 + 13 + 32 + 11 + 22 + 54 + 11 + 17 = 203 checks, plus the 25-question retrieval eval
 npm run eval    # retrieval eval only (offline, deterministic)
 ```
 
 - `test/smoke.mjs` — storage, redaction, BM25 retrieval, entity expansion, supersede chain, extractor parsing; and near-duplicate titles not forking the graph (a re-worded card folds into the old one, the fuller body wins, never across projects, and a card that names its `supersedes` is a reversal rather than a duplicate)
-- `test/schema.mjs` — the Settings page must not drift from the runtime: every leaf of `Config({})` is compared with `resolveConfig({})` in both directions (`vaultDir` is the one exception — the page holds raw text, the runtime an absolute path), so a dead control and an invisible setting both fail; plus the transport union, numeric bounds, the `secret` role on the inline key, the 28 volatile leaves matching the page's field table exactly, and the four structural keys staying off it
+- `test/schema.mjs` — the Settings page must not drift from the runtime: every leaf of `Config({})` is compared with `resolveConfig({})` in both directions (`vaultDir` is the one exception — the page holds raw text, the runtime an absolute path), so a dead control and an invisible setting both fail; plus the transport union, numeric bounds, the `secret` role on the inline key, the volatile leaves matching the page's field table exactly, and the four structural keys staying off it
 - `test/client.mjs` — mounts the page on a minimal React stand-in: the controls drawn equal the fields that should show, switching `transport` reveals the http knobs, an empty inline key is never sent as a deletion, an out-of-range number never reaches the wire, a refused save clears the drafts and explains itself, restore sends `unset` rather than `set`, a value that merely repeats the inherited default is not badged as a customisation, the stylesheet is a single `<style>` tagged with the package name, and `client.js` contains no `export`/`import` (the loader evaluates it as a script). It then evaluates `client.js` in a fake page carrying `window.__ModuleLoader__` and walks the real browser path — factory, `apply`, both slot registrations — checking that `react` is the only module required, the registration id is the package name, the orders are 25 and 30, and the labels follow the page language. Finally it drives the **Memory tab**: one request per paint carrying this `sessionId`, every node and edge the host sent drawn, a click opening the card's title and body in the side panel, and both the empty session and the failing route explaining themselves instead of going blank
 - `test/graphdata.mjs` — the Memory tab's data: episodes filtered by `session`, majority project, the recall query taking the newest turns, a deterministic layout inside the box, every edge pointing at a node that exists, a cross-project card arriving through a shared entity, the caps reporting that they held, no assistant text in the payload, and the route answering 400 / 200 / 500 for missing session, normal, and a broken vault
 - `test/capture.mjs` — drives the capture listener with real `session/event` shapes, including injected context
 - `test/tools.mjs` — runs `execute` + `render` for all eight tools
+- `test/distillapi.mjs` — the Distill now door: `/api/memory-graph.distill` on the authenticated `/api` channel, running the same `distill()` (live vault, the model selected in Settings, the live redaction rules), one press is one run, a concurrent second press is refused instead of queued, an extractor refusal is a 200 and not a 500, a throw is a 500 with the lock still released, views are re-rendered only when cards were written, a render failure only warns, the card list is capped at 40, and a route with no runner answers 500 instead of throwing at the browser
+- `test/auto.mjs` — the automatic distiller: each rule fires on its own, whichever matches first runs when both are on, the minimum gap is checked before the rules, a quiet window may cross midnight, a tick only decides (an off switch does not even read the vault), one tick is at most one run, the gap is armed before the call, a restart reads `.auto-state.json` instead of starting over, a run that wrote nothing still arms the gap, an in-flight run is not stacked on, failures are logged with their reason, the project reaches the run, an unreadable vault is a skip and not a crash, and the tick asks for enough episodes to see the threshold
 - `test/extract.mjs` — the extractor: `fetch` stubbed for the http route (prompt construction, key resolution order, tolerant JSON parsing, per-card project attribution, cursor advance, dry run writing nothing, secrets stopped before the write), then a fake `llm` service for the harness route (borrows the Settings model and thinking level, honours an explicit override, explains a missing selection, handles every terminal `finish`, reports cancellation, rejects an empty completion, and never touches `fetch`), and finally batching: the batch size derived from the output budget, a long backlog split across calls, a truncated batch halved and retried, earlier batches kept when a later one fails, and `dryRun` previewing only the first batch
 
 Two suites do touch the network (and cost money), so they are not in `npm test`:

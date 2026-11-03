@@ -240,6 +240,60 @@ const retrieval = z.object({
   ),
 })
 
+/**
+ * The automatic distiller. Two independent rules over one minute-long tick:
+ * "this many episodes are waiting" and "this many minutes have passed". Both are
+ * live, so switching one on takes effect without remounting the plugin — and both
+ * default to zero/off, because a background run spends the user's model budget.
+ */
+const auto = z.object({
+  enabled: live(
+    z
+      .boolean()
+      .default(false)
+      .description('自动蒸馏总开关 · run distillations without being asked (spends model budget)'),
+  ),
+  minEpisodes: live(
+    z
+      .number()
+      .min(0)
+      .max(400)
+      .step(1)
+      .default(0)
+      .description('攒够多少条未蒸馏情节就蒸一次；0 = 关闭这条规则 · distill once this many episodes are waiting; 0 turns the rule off'),
+  ),
+  everyMinutes: live(
+    z
+      .number()
+      .min(0)
+      .max(10080)
+      .step(5)
+      .default(0)
+      .description('每隔多少分钟蒸一次；0 = 关闭这条规则 · distill at most every N minutes; 0 turns the rule off'),
+  ),
+  minGapMinutes: live(
+    z
+      .number()
+      .min(0)
+      .max(1440)
+      .step(5)
+      .default(30)
+      .description('两次自动蒸馏之间至少隔多久 · minimum gap between two automatic runs'),
+  ),
+  quietHours: live(
+    z
+      .string()
+      .default('')
+      .description('不跑的时间段，如 23:00-08:00；空 = 全天 · quiet window like 23:00-08:00; empty = always on'),
+  ),
+  project: live(
+    z
+      .string()
+      .default('')
+      .description('自动蒸馏记到哪个项目；空 = 最近情节的项目 · project for automatic cards; empty = the newest episode\'s project'),
+  ),
+})
+
 export const Config = z.object({
   // Structural: read once while activating. Editing one remounts the plugin,
   // which is exactly the semantics it needs, so they stay ordinary.
@@ -262,6 +316,7 @@ export const Config = z.object({
   capture,
   privacy,
   extractor,
+  auto,
   retrieval,
 })
 

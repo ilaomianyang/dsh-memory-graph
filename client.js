@@ -298,6 +298,78 @@ const SECTIONS = [
     ],
   },
   {
+    id: 'auto',
+    title: t('自动蒸馏', 'Automatic distillation'),
+    hint: t(
+      '关着的时候只有你按「蒸馏一次」或模型调 memory_distill 才会跑。打开后插件每分钟看一次有没有该蒸的（只看计数，不调模型、不花钱），命中下面任一规则才真的跑一次。',
+      'While off, only the Distill now button or a memory_distill call runs a distillation. Turned on, the plugin looks once a minute (counting only — no model call, no cost) and runs only when one of the rules below matches.',
+    ),
+    fields: [
+      {
+        path: ['auto', 'enabled'],
+        type: 'boolean',
+        label: t('启用自动蒸馏', 'Enable automatic distillation'),
+        hint: t(
+          '自动跑的是同一个 distill()，用同一个模型、同一套打码规则。它花的是你的额度。',
+          'It runs the same distill() with the same model and the same redaction rules — and spends your model budget.',
+        ),
+      },
+      {
+        path: ['auto', 'minEpisodes'],
+        type: 'number',
+        min: 0,
+        max: 400,
+        step: 1,
+        unit: t('条', 'episodes'),
+        label: t('攒够就蒸', 'Distill once this many pile up'),
+        hint: t('未蒸馏的情节攒到这个数就跑一次；0 = 关掉这条规则。', 'Runs when this many undistilled episodes are waiting; 0 turns the rule off.'),
+      },
+      {
+        path: ['auto', 'everyMinutes'],
+        type: 'number',
+        min: 0,
+        max: 10080,
+        step: 5,
+        unit: t('分钟', 'min'),
+        label: t('定时蒸', 'Distill on a schedule'),
+        hint: t(
+          '距上次自动蒸馏过了这么多分钟就跑一次；0 = 关掉这条规则。1440 是每天。',
+          'Runs once this many minutes have passed since the last automatic run; 0 turns the rule off. 1440 is once a day.',
+        ),
+      },
+      {
+        path: ['auto', 'minGapMinutes'],
+        type: 'number',
+        min: 0,
+        max: 1440,
+        step: 5,
+        unit: t('分钟', 'min'),
+        label: t('最短间隔', 'Minimum gap'),
+        hint: t(
+          '两条规则共用：两次自动蒸馏至少隔这么久，免得刚攒够就被反复问。',
+          'Shared by both rules: never two automatic runs closer than this, so a busy vault does not keep re-asking.',
+        ),
+      },
+      {
+        path: ['auto', 'quietHours'],
+        type: 'text',
+        placeholder: '23:00-08:00',
+        label: t('静默时段', 'Quiet hours'),
+        hint: t(
+          '这段时间里不跑（可以跨午夜）；留空 = 全天都能跑。写不对就当没写，不会因此永远不跑。',
+          'Nothing runs inside this window (it may cross midnight); empty means always. Unreadable text is ignored rather than silencing the feature forever.',
+        ),
+      },
+      {
+        path: ['auto', 'project'],
+        type: 'text',
+        placeholder: t('留空 = 最近情节的项目', "empty = the newest episode's project"),
+        label: t('记到哪个项目', 'Project'),
+        hint: t('自动蒸馏出的卡片归属哪个项目。', 'Which project automatic cards are filed under.'),
+      },
+    ],
+  },
+  {
     id: 'retrieval',
     title: t('召回', 'Recall'),
     hint: t(

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.8.0 — 2026-11-03
+
+上一版给了个按钮，但按钮要人按。现在可以自己定义它什么时候跑：**攒够多少条**，或者**每隔多久**。两条规则互相独立，都可以单独开、单独关。
+
+**Added**
+
+- `src/auto.js`：一个每分钟的节拍 + 一个纯函数决定"这一拍该不该跑"。节拍只做算术（未蒸馏条数、距上次多久、是不是静默时段），**不调模型**；命中规则才跑一次。决定逻辑是纯函数，所以 17 项测试一秒跑完，不用等一分钟也不用花一个 token。
+- 两条规则：`auto.minEpisodes`（未蒸馏情节攒够 N 条）与 `auto.everyMinutes`（距上次 N 分钟，1440 = 每天）。
+- 三个共用的闸门：`auto.minGapMinutes`（最短间隔，默认 30）、`auto.quietHours`（静默时段，可跨午夜）、`auto.project`（自动卡片记到哪个项目）。
+- 间隔**在调用之前**就落盘到 `.auto-state.json`（只有 `lastAttemptAt`）：跑空了也算数，重启也不重置，否则一个安静的库会被每分钟问一遍。
+- `src/distillrun.js`：把「一次蒸馏」抽成共享 runner（单飞锁 + 报告 + 视图重建 + 卡片上限）。按钮、`memory_distill`、自动蒸馏三条路走同一把锁——正在跑时第二条路拿到"已经有一次在跑"，不排队。
+- `src/vault.js`：`readAutoState` / `writeAutoState`。和 `.distill-state.json`（游标）分开：游标回答"哪些行读过了"，它回答"上次尝试是什么时候"，混在一起就表达不了"读了但没产出"。
+- 设置页多了「自动蒸馏」一节（6 个字段，全部 volatile，改完立刻生效）。
+
+**Changed**
+
+- `src/distillapi.js` 只负责把报告翻成 HTTP 状态；锁和报告挪进 `src/distillrun.js`。
+- `memory_distill` 的 `execute` 优先走 runner（`registerTools` 新增可选 `runner`），所以模型要的那次蒸馏不会和一次自动蒸馏撞在一起；`dryRun` 与取消信号照样透传。
+- 测试：`test/client.mjs` 31 → 32、`test/tools.mjs` 21 → 22、`test/distillapi.mjs` 9 → 11、新增 `test/auto.mjs` 17 项，合计 **203** 项。`test/schema.mjs` 的 volatile 叶子数改成"等于页面字段表"，多一格少一格都失败。
+
+**Note**
+
+- 默认仍然是**关**。这不是保守，是定价：一次蒸馏是一次真模型调用，什么时候花这笔钱应该是用户的决定，不是插件的。
+
 ## 0.7.0 — 2026-11-03
 
 蒸馏以前只有一条路：模型自己想起来调 `memory_distill`。采集是自动的、蒸馏不是，而界面上没有任何地方能按一下。现在会话页签的页头有 **蒸馏一次**。

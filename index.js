@@ -27,6 +27,8 @@ import { registerTools } from './src/tools.js'
 import { registerCapture } from './src/capture.js'
 import { createGraphHandler, GRAPH_PATH } from './src/graphdata.js'
 import { createDistillHandler, DISTILL_PATH } from './src/distillapi.js'
+import { createDistillRunner } from './src/distillrun.js'
+import { createAutoDistiller, registerAutoDistill } from './src/auto.js'
 import { extractorServices } from './src/extract.js'
 
 export const name = 'memory-graph'
@@ -111,8 +113,26 @@ export function apply(ctx, config) {
     return () => {}
   })
 
+  // One distillation at a time, for the whole plugin. Three callers can ask for
+  // one — the model's tool, the panel's button, and the automatic distiller — and
+  // a distillation spends real model budget while advancing one cursor in the
+  // vault, so they all go through this runner and the second caller is refused
+  // rather than queued.
+  const runner = createDistillRunner({
+    getVault: () => vault,
+    getConfig: () => cfg,
+    getRedactor: () => redactor,
+    getServices: () => extractorServices(ctx),
+    refreshViews: async () => {
+      for (const render of [vault.regenerateReadme, vault.regenerateGraph]) {
+        if (typeof render === 'function') await render.call(vault)
+      }
+    },
+    log,
+  })
+
   ctx.effect(() => {
-    const disposers = registerTools(ctx, { cfg, vault, redactor })
+    const disposers = registerTools(ctx, { cfg, vault, redactor, runner })
     log('info', `${disposers.length} memory tools registered`)
     return () => {
       for (const dispose of disposers) {
@@ -121,6 +141,23 @@ export function apply(ctx, config) {
         } catch {
           // Disposal of an already-gone registration is not an error.
         }
+      }
+    }
+  })
+
+  // The automatic distiller: a tick that decides, never a timer that fires a run.
+  // Both triggers (a threshold of waiting episodes, and "every N minutes") default
+  // to off and are live Settings fields, so the ticker runs whether or not they
+  // are on and simply reads the config each time.
+  ctx.effect(() => {
+    const distiller = createAutoDistiller({ cfg, vault, run: (options) => runner.run(options), log })
+    const stop = registerAutoDistill({ ctx, distiller })
+    log('info', `auto distill ${cfg.auto.enabled ? 'on' : 'off'} (threshold ${cfg.auto.minEpisodes || '—'}, every ${cfg.auto.everyMinutes || '—'} min)`)
+    return () => {
+      try {
+        stop()
+      } catch {
+        // ignore
       }
     }
   })
@@ -173,18 +210,7 @@ export function apply(ctx, config) {
         path: DISTILL_PATH,
         methods: ['POST'],
         requestBody: 'buffered',
-        fetch: createDistillHandler({
-          getVault: () => vault,
-          getConfig: () => cfg,
-          getRedactor: () => redactor,
-          getServices: () => extractorServices(ctx),
-          refreshViews: async () => {
-            for (const render of [vault.regenerateReadme, vault.regenerateGraph]) {
-              if (typeof render === 'function') await render.call(vault)
-            }
-          },
-          log,
-        }),
+        fetch: createDistillHandler({ getRunner: () => runner }),
       })
       log('info', `session memory view served at ${GRAPH_PATH}, distill at ${DISTILL_PATH}`)
       return () => {

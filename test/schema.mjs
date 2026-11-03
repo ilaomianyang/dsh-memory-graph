@@ -199,7 +199,16 @@ check('the live knobs are volatile, which is the only thing 设置 can write', (
   // `volatileForm()` in dsh-settings returns undefined unless some leaf is
   // volatile, and an undefined form means the entry does not appear in 设置 at
   // all — this is the check that would have caught the empty settings page.
-  assert.equal(live.length, 28, `expected 28 volatile leaves, found ${live.length}`)
+  assert.equal(
+    live.length,
+    spec.paths.length,
+    `expected one volatile leaf per page field, found ${live.length} live leaves for ${spec.paths.length} fields`,
+  )
+  assert.equal(
+    structural.length,
+    4,
+    `only enabled / vaultDir / defaultProject / crossProject stay ordinary, found ${structural.length}`,
+  )
   assert.deepEqual(
     live.map((leaf) => leaf.path).sort(),
     [...spec.paths].sort(),

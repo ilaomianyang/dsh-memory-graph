@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-memory-graph",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "type": "module",
   "description": "Long-term associative memory for DeepSeek Harness: a local plain-text vault of raw episodes, typed memory cards and entity pages, configured from 设置 → 记忆图谱, and a Memory tab inside a conversation that draws what that session remembered. No build step; the only dependency is the harness's own schema library, used for the Settings page.",
   "keywords": [
@@ -38,7 +38,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/smoke.mjs && node test/schema.mjs && node test/client.mjs && node test/capture.mjs && node test/tools.mjs && node test/extract.mjs && node test/graphdata.mjs && node test/distillapi.mjs && node eval/run.mjs",
+    "test": "node test/smoke.mjs && node test/schema.mjs && node test/client.mjs && node test/capture.mjs && node test/tools.mjs && node test/extract.mjs && node test/graphdata.mjs && node test/distillapi.mjs && node test/auto.mjs && node eval/run.mjs",
     "eval": "node eval/run.mjs",
     "live": "node test/live.mjs",
     "live:supersede": "node test/live-supersede.mjs",

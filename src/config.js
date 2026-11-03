@@ -97,6 +97,24 @@ const DEFAULTS = {
     snippetChars: 220,
     timelineLimit: 30,
   },
+  /**
+   * The automatic distiller: two independent triggers that share one tick and
+   * one lock. Both default to off — a background model call is the user's
+   * decision, never the plugin's.
+   */
+  auto: {
+    enabled: false,
+    /** Undistilled-episode threshold; 0 turns the threshold rule off. */
+    minEpisodes: 0,
+    /** Minutes between runs; 0 turns the schedule rule off. */
+    everyMinutes: 0,
+    /** Never two automatic runs closer than this, whichever rule fired. */
+    minGapMinutes: 30,
+    /** `23:00-08:00` style window in which nothing runs. Empty means always. */
+    quietHours: '',
+    /** Project tag for automatic cards; empty uses the newest episode's project. */
+    project: '',
+  },
 }
 
 function isPlainObject(value) {
@@ -215,7 +233,33 @@ export function resolveConfig(raw) {
     cfg.extractor.transport === 'http' ? String(cfg.extractor.model || 'deepseek-chat') : String(cfg.extractor.model || '')
   cfg.extractor.apiKeyEnv = String(cfg.extractor.apiKeyEnv || 'MEMORY_LLM_API_KEY')
 
+  cfg.auto.enabled = cfg.auto.enabled === true
+  cfg.auto.minEpisodes = int(cfg.auto.minEpisodes, 0, 0, 400)
+  cfg.auto.everyMinutes = int(cfg.auto.everyMinutes, 0, 0, 10080)
+  cfg.auto.minGapMinutes = int(cfg.auto.minGapMinutes, 30, 0, 1440)
+  cfg.auto.project = String(cfg.auto.project || '').trim()
+  // A malformed window must not disable the rule or, worse, silence it forever:
+  // parse what is parseable and fall back to "no quiet hours".
+  cfg.auto.quietHours = parseQuietHours(cfg.auto.quietHours) === null ? '' : String(cfg.auto.quietHours).trim()
+
   return cfg
+}
+
+/**
+ * `23:00-08:00` → minute bounds for comparison; `null` when the text is unusable.
+ *
+ * Exported because the auto distiller and the Settings hint must agree on what
+ * counts as a valid window, and a window crossing midnight (start > end) is the
+ * common case, not an edge case.
+ */
+export function parseQuietHours(text) {
+  const raw = String(text ?? '').trim()
+  if (raw === '') return null
+  const match = /^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/u.exec(raw)
+  if (!match) return null
+  const [fromH, fromM, toH, toM] = match.slice(1).map(Number)
+  if (fromH > 23 || toH > 23 || fromM > 59 || toM > 59) return null
+  return { from: fromH * 60 + fromM, to: toH * 60 + toM }
 }
 
 export function paths(vaultDir) {
@@ -231,5 +275,6 @@ export function paths(vaultDir) {
     entities: path.join(vaultDir, 'entities'),
     audit: path.join(vaultDir, 'audit'),
     distillState: path.join(vaultDir, '.distill-state.json'),
+    autoState: path.join(vaultDir, '.auto-state.json'),
   }
 }

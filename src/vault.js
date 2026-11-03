@@ -818,6 +818,28 @@ export function createVault(cfg, redactor) {
     return out
   }
 
+  /**
+   * The automatic distiller's own bookkeeping.
+   *
+   * Kept out of `.distill-state.json` on purpose: that file is the *cursor*
+   * (which lines have been read) and is written by `markDistilled`. This one
+   * records attempts — including the ones that produced nothing — because the
+   * gap between two automatic runs must hold even when a run wrote no cards,
+   * or a quiet vault would be re-asked every minute.
+   */
+  async function readAutoState() {
+    return readJson(P.autoState, {})
+  }
+
+  async function writeAutoState(patch) {
+    return withLock(`auto:${P.autoState}`, async () => {
+      const state = await readJson(P.autoState, {})
+      Object.assign(state, patch)
+      await writeAtomic(P.autoState, `${JSON.stringify(state, null, 2)}\n`)
+      return state
+    })
+  }
+
   return {
     dir: cfg.vaultDir,
     paths: P,
@@ -827,6 +849,8 @@ export function createVault(cfg, redactor) {
     episodeFiles,
     readUndistilled,
     readEpisodes,
+    readAutoState,
+    writeAutoState,
     markDistilled,
     listCards,
     getCard,

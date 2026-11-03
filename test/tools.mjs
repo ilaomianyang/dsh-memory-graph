@@ -177,6 +177,35 @@ check('distill without an extractor explains itself instead of failing', () => {
   assert.ok(distilled.text.includes('extractor.enabled'), distilled.text)
 })
 
+// The plugin wires one runner and hands it to the tools, the route and the
+// automatic distiller. The tool must use it: a distillation the model asks for
+// while a scheduled one is already running has to be refused, not run twice.
+const runnerTools = []
+const runnerCalls = []
+registerTools(
+  { tools: { register: (definition) => (runnerTools.push(definition), () => {}) }, get: () => undefined, logger: { info() {}, warn() {} } },
+  {
+    cfg,
+    vault,
+    redactor,
+    runner: {
+      async run(options) {
+        runnerCalls.push(options)
+        return { ok: true, episodes: 2, written: 1, cards: [{ id: 'c9', kind: 'fact', title: '走 runner 写的卡' }] }
+      },
+    },
+  },
+)
+const viaRunner = await runnerTools.find((d) => d.name === 'memory_distill').execute({ project: 'tools-test' }, { signal: 'SIG' })
+check('the model’s distillation goes through the shared runner, not around it', () => {
+  assert.equal(runnerCalls.length, 1, 'exactly one run')
+  assert.equal(runnerCalls[0].project, 'tools-test', 'the tool arg survives the hop')
+  assert.equal(runnerCalls[0].dryRun, false)
+  assert.equal(runnerCalls[0].signal, 'SIG', 'cancellation survives it too')
+  assert.equal(viaRunner.ok, true)
+  assert.ok(viaRunner.text.includes('走 runner 写的卡'), viaRunner.text)
+})
+
 /* ------------------------------------------------------------------ forget */
 const retracted = await call('memory_forget', { id: secret.value.id, mode: 'retract', reason: 'test' })
 check('retract keeps the card and marks it', () => {

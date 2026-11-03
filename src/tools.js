@@ -72,7 +72,7 @@ function describeExtractor(ctx, cfg) {
   }
 }
 
-export function registerTools(ctx, { cfg, vault, redactor }) {
+export function registerTools(ctx, { cfg, vault, redactor, runner = null }) {
   const disposers = []
 
   /**
@@ -461,15 +461,12 @@ export function registerTools(ctx, { cfg, vault, redactor }) {
       },
       output: { schema: OUTPUT_SCHEMA, render: (args, value) => json(args, value.text ?? value) },
       async execute(args, exec) {
-        const report = await distill({
-          cfg,
-          vault,
-          redactor,
-          project: args.project ?? projectFor(ctx, exec, cfg),
-          dryRun: Boolean(args.dryRun),
-          signal: exec?.signal,
-          ...extractorServices(ctx),
-        })
+        const target = { project: args.project ?? projectFor(ctx, exec, cfg), dryRun: Boolean(args.dryRun), signal: exec?.signal }
+        // Through the shared runner when the plugin wired one: a distillation the
+        // model asks for must not overlap an automatic run or a pressed button.
+        const report = runner
+          ? await runner.run(target)
+          : await distill({ cfg, vault, redactor, ...target, ...extractorServices(ctx) })
         const lines = []
         const batches = report.batches
         if (!report.ok) {
