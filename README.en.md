@@ -351,7 +351,7 @@ Light:
 
 ![The memory graph in light mode](docs/graph-light.png)
 
-It is **one self-contained HTML file**: no CDN, no three.js, no framework, no build step, no network requests — the perspective projection and the glow are hand-written canvas 2D, and the data is inlined at render time. 168 cards + 332 entities → 382 KB. Delete it if you like; the next write regenerates it.
+It is **one self-contained HTML file**: no CDN, no three.js, no framework, no build step, no network requests — the perspective projection and the glow are hand-written canvas 2D, and the data is inlined at render time. 168 cards + 332 entities → 459 KB. Delete it if you like; the next write regenerates it.
 
 Positions are **computed and replayable**: the 3D force layout is seeded from a hash of each card key, so drawing the same vault twice puts every neuron in the same place — two renders of one vault differ only in the timestamp (there is a test watching that).
 
