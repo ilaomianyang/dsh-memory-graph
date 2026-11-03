@@ -61,10 +61,20 @@ backed up directly.
 ## Install
 
 ```
-plugin_manager action=install_bundle target="<absolute path to this repo>"
+git clone https://github.com/ilaomianyang/dsh-memory-graph
+cd dsh-memory-graph
+npm install                 # one dependency: the harness's own schema library
 ```
 
-`install_bundle` links a local directory with `link:`, which does **not** install the package's dependencies, so run `npm install` once in this repo (it is a single package). Without it the plugin still runs — there is simply no Memory Graph page in Settings.
+Then, in Harness, let the model run this, or point the plugin manager at that directory:
+
+```
+plugin_manager action=install_bundle target="<absolute path of the clone>"
+```
+
+`install_bundle` links a local directory with `link:`, which does **not** install the package's dependencies, so do not skip `npm install` above. Without it the plugin still runs — there is simply no Memory Graph page in Settings.
+
+To follow along: `git pull`, then reload the plugin (`plugin_manager action=set_plugin target="include:memory-graph" enabled=false`, then `enabled=true`).
 
 The vault defaults to `~/dsh-memory` and is created on activation.
 
@@ -72,7 +82,7 @@ The vault defaults to `~/dsh-memory` and is created on activation.
 
 After the restart it is **Settings → Memory Graph**, between Models and Plugins.
 
-Uninstall with `plugin_manager action=remove_bundle target="@local/dsh-memory-graph"`. The vault is not touched — it lives in `~/dsh-memory`, independent of the plugin.
+Uninstall with `plugin_manager action=remove_bundle target="dsh-memory-graph"`. The vault is not touched — it lives in `~/dsh-memory`, independent of the plugin.
 
 ## What you get on disk
 

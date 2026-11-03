@@ -248,7 +248,7 @@ export function createVault(cfg, redactor) {
       if (!(await exists(P.vaultJson))) {
         await writeAtomic(
           P.vaultJson,
-          `${JSON.stringify({ schema: 'dsh-memory-graph/1', created: nowIso(), app: '@local/dsh-memory-graph' }, null, 2)}\n`,
+          `${JSON.stringify({ schema: 'dsh-memory-graph/1', created: nowIso(), app: 'dsh-memory-graph' }, null, 2)}\n`,
         )
       }
       if (!(await exists(P.projects))) {

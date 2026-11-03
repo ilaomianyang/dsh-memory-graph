@@ -1,7 +1,16 @@
 {
-  "name": "@local/dsh-memory-graph",
+  "name": "dsh-memory-graph",
   "version": "0.8.0",
   "type": "module",
+  "author": "ISKING <admin@isking.cc>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ilaomianyang/dsh-memory-graph.git"
+  },
+  "homepage": "https://github.com/ilaomianyang/dsh-memory-graph#readme",
+  "bugs": {
+    "url": "https://github.com/ilaomianyang/dsh-memory-graph/issues"
+  },
   "description": "Long-term associative memory for DeepSeek Harness: a local plain-text vault of raw episodes, typed memory cards and entity pages, configured from 设置 → 记忆图谱, and a Memory tab inside a conversation that draws what that session remembered. No build step; the only dependency is the harness's own schema library, used for the Settings page.",
   "keywords": [
     "dsh",

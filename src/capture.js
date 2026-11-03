@@ -5,7 +5,6 @@
  * loses anything" guarantee holds even while the extractor is unconfigured,
  * offline, or out of quota. Distillation happens later and separately.
  */
-import path from 'node:path'
 import { nowIso } from './vault.js'
 
 const FLUSH_AFTER_MS = 90_000
@@ -40,7 +39,10 @@ function eventText(event) {
 function projectOf(session, fallback) {
   const cwd = session?.header?.cwd ?? session?.meta?.cwd ?? session?.cwd
   if (typeof cwd === 'string' && cwd.trim() !== '') {
-    const base = path.basename(cwd.replace(/[\\/]+$/, ''))
+    // Both separators, whatever platform this is running on: the path comes from
+    // the session header, which may well have been written on the other OS.
+    const parts = cwd.replace(/[\\/]+$/, '').split(/[\\/]/)
+    const base = parts[parts.length - 1] ?? ''
     if (base !== '') return base
   }
   return fallback

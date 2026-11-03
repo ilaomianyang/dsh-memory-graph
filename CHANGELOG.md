@@ -25,6 +25,12 @@
 
 - 采集会把宿主的 runtime 快照当成你说的话记下来——实测库里就躺着一条 1501 字的图像工具说明，被 1500 字上限截断后当成一轮对话。原因是"这是不是人说的"只看 `source.kind`，而这条快照带的正是 `user`。现在来源只能**增加**跳过，不能否决文本规则，两条都过；判断之前先剥掉 `<system-reminder>…</system-reminder>` 这种有边界的块，所以一条真消息里带了提醒时，剥完留下你的原话，而不是整条丢掉。
 - README 记下两个已知限制：采集不回溯（老会话没有情节，因为它只从插件在场那一刻开始），以及子智能体的开场提示词也会被当成一条情节（还没过滤）。
+**发布**
+
+- 包名从占位的 `@local/dsh-memory-graph` 改成 `dsh-memory-graph`（`package.json` / `client.js` 的 bundle id / `cordis.patch.yml` / 库里的 `vault.json` 标记四处一起改，它们必须一致）。补上 `repository` / `homepage` / `bugs` / `author`。
+- README 补上 `git clone` 安装路径；截图裁掉左侧边栏（工作区名、会话标题、账号）。
+- `.github/workflows/test.yml`：push / PR 时在 windows-latest 上跑 Node 20 与 22 的 `npm test`（221 项 + 离线评测，不联网、不碰记忆库）。
+- `projectOf` 不再用 `path.basename`：它只认当前平台的斜杠，而会话头里的 cwd 可能是另一个系统写下的。两个斜杠都切。
 **Note**
 
 - 默认仍然是**关**。这不是保守，是定价：一次蒸馏是一次真模型调用，什么时候花这笔钱应该是用户的决定，不是插件的。

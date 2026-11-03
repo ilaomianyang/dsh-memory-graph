@@ -21,7 +21,7 @@
  * so `test/schema.mjs` can hold the page and the schema to each other.
  */
 
-const PACKAGE_NAME = '@local/dsh-memory-graph'
+const PACKAGE_NAME = 'dsh-memory-graph'
 const HOST_ENTRY_ID = 'memory-graph'
 const STYLE_ID = 'dsh-memory-graph-settings-css'
 /** The Conversation view cell this plugin adds, and the host routes it reads. */

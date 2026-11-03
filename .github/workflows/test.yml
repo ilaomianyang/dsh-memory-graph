@@ -1,0 +1,23 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # The plugin is exercised through the harness's own event shapes, and the
+    # fixture paths are Windows ones, so CI runs where it was developed.
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm install
+      # 221 checks plus the offline retrieval eval. No network, no vault.
+      - run: npm test
