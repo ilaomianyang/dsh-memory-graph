@@ -753,7 +753,9 @@ const CSS = `
 .mgv-panel-frame {
   flex: 1 1 auto;
   width: 100%;
-  min-height: 0;
+  /* The panel is a flex child of a shell seat that may not hand down a definite
+     height; without a floor the frame would collapse to nothing there. */
+  min-height: 60vh;
   border: 0;
   background: var(--dsw-alias-bg-l1, #fff);
 }
