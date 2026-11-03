@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.10.3 — 2026-11-03
+
+发布流水线的两件收尾。插件功能没有变化——这一版自己就是流水线的验收样本。
+
+**Added**
+
+- 发布成功后自动在本仓库建 GitHub Release：`gh release create --generate-notes`，并把 `npm pack` 出来的 tarball 附上去。建 Release 的前提是 npm 已经接受这个版本（`steps.publish.outcome == 'success'`），所以不会出现「有 Release、npm 上没有」的错位；同名 Release 已存在就跳过，重跑同一条流水线是安全的。`gh` 是 runner 自带的，没有引入第三方 action。
+- 给 `v0.10.0`、`v0.10.1`、`v0.10.2` 补建了 Release。
+
+**Changed**
+
+- `actions/checkout@v4`、`actions/setup-node@v4` → `v5`。GitHub 通报 Node 20 运行时弃用：v4 会被强行拉到 Node 24 上跑，功能不变但每次 run 都挂一条警告。
+- 发布流水线需要 `contents: write`（建 Release 用），原来只有 `contents: read`。
+
 ## 0.10.2 — 2026-11-03
 
 补一个从第一天就存在的渲染缺陷，并让发布流水线第一次真正跑完。

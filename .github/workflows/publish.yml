@@ -19,12 +19,12 @@ jobs:
     # (which `prepublishOnly` runs again) only passes here.
     runs-on: windows-latest
     permissions:
-      contents: read
+      contents: write # gh release create needs this; reading the repo would not
       id-token: write # npm provenance: signs the tarball with this run's OIDC identity
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
@@ -97,9 +97,39 @@ jobs:
           npm pack --dry-run
 
       - name: publish
+        id: publish
         if: steps.guard.outputs.skip == 'false' && (github.event_name == 'push' || inputs.dry_run == false)
         # prepublishOnly runs the full suite again, so a red build cannot reach
         # the registry even if this workflow is bypassed.
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Only after the registry accepted the tarball: a release page must never
+      # exist for a version npm does not have. `gh` is preinstalled on the
+      # runners, so this needs no third-party action and no extra secret.
+      - name: release this tag on GitHub
+        if: startsWith(github.ref, 'refs/tags/v') && steps.guard.outputs.skip == 'false' && steps.publish.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $repo = '${{ github.repository }}'
+          $exists = $false
+          # Invoke-RestMethod, not `gh release view`: a 404 is the normal answer
+          # here, and a native command's non-zero exit ends the step under the
+          # runner's $PSNativeCommandUseErrorActionPreference.
+          try {
+            Invoke-RestMethod -TimeoutSec 30 -Headers @{ Authorization = "Bearer $env:GH_TOKEN" } -Uri "https://api.github.com/repos/$repo/releases/tags/$tag" | Out-Null
+            $exists = $true
+          } catch {
+            $exists = $false
+          }
+          if ($exists) {
+            Write-Output "a release for $tag already exists; leaving it alone"
+            exit 0
+          }
+          npm pack | Out-Null
+          $tgz = (Get-ChildItem *.tgz | Select-Object -First 1).Name
+          gh release create $tag $tgz --title $tag --generate-notes
+          Write-Output "released $tag with $tgz"
