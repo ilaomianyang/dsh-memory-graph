@@ -740,6 +740,24 @@ await check('applying it contributes the Memory Graph page to Settings', async (
   view.unmount()
 })
 
+await check('the action bar is a sibling of the scroll box, not a sticky child of it', async () => {
+  const bundle = await openBrowserBundle()
+  bundle.exports.apply(bundle.ctx)
+  const [{ Component }] = bundle.sections.filter((entry) => entry.spec.name === 'settings.section')
+  const view = mount(Component, bundle.runtime)
+  const page = byClass(view.tree, 'mg-page')
+  assert.equal(page.length, 1, 'the page is one flex column')
+  const scroll = byClass(view.tree, 'mg-root')[0]
+  const bar = byClass(view.tree, 'mg-bar')[0]
+  assert.ok(scroll && bar, 'both the scroll box and the bar are on screen')
+  // Sticky inside the scroller is what put the bar in the middle of the page: it
+  // pinned the margin box, so the bar floated over the rows it was meant to sit
+  // under. Two rows of a flex column cannot do that.
+  assert.equal(nodes(scroll).includes(bar), false, 'the bar lives outside the scroller')
+  assert.ok(nodes(page[0]).includes(scroll), 'the scroller is inside the page')
+  assert.ok(nodes(page[0]).includes(bar), 'so is the bar')
+  view.unmount()
+})
 await check('the sidebar gets an entry of its own, and the main area a page behind it', async () => {
   const bundle = await openBrowserBundle()
   bundle.exports.apply(bundle.ctx)

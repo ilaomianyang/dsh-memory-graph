@@ -564,14 +564,26 @@ function servedNamespace(ctx, forms) {
 // ---------------------------------------------------------------------------
 
 const CSS = `
+/* Two rows, not one scroll box: the page fills the pane, the content scrolls
+   inside it, and the action bar is a plain sibling at the bottom. A sticky bar
+   inside the scroller was the obvious thing and it was wrong — sticky pins the
+   MARGIN box, so the negative bottom margin that cancelled the old padding also
+   lifted the bar off the floor, and it floated over the rows behind it. */
+.mg-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
 .mg-root {
   display: flex;
   flex-direction: column;
   gap: 14px;
   box-sizing: border-box;
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
-  padding: 20px 26px 92px;
+  padding: 20px 26px 24px;
   color: var(--dsw-alias-label-primary, #1f2328);
   font-size: 13px;
   line-height: 1.55;
@@ -699,12 +711,10 @@ const CSS = `
   background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.05));
 }
 .mg-bar {
-  position: sticky;
-  bottom: 0;
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 2px -26px -92px;
+  flex: 0 0 auto;
   padding: 10px 26px;
   border-top: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.1));
   background: var(--dsw-alias-bg-layer-1, #fff);
@@ -1216,60 +1226,64 @@ function createPage(ctx, React) {
 
     return h(
       'div',
-      { className: 'mg-root' },
+      { className: 'mg-page' },
       h(
         'div',
-        { className: 'mg-head' },
-        h('div', { className: 'mg-title' }, t('记忆图谱', 'Memory graph')),
+        { className: 'mg-root' },
         h(
           'div',
-          { className: 'mg-sub' },
-          t(
-            '长期联想记忆：原始片段 → 带类型的记忆卡 → 实体页。下面的每一项都立即生效，不需要重启。',
-            'Long-term associative memory: raw episodes → typed cards → entity pages. Every knob below applies immediately, no restart.',
-          ),
-        ),
-      ),
-
-      ...SECTIONS.map((section) =>
-        h(
-          'section',
-          { key: section.id, className: 'mg-card' },
+          { className: 'mg-head' },
+          h('div', { className: 'mg-title' }, t('记忆图谱', 'Memory graph')),
           h(
             'div',
-            { className: 'mg-card-h' },
-            h('div', { className: 'mg-card-t' }, section.title),
-            section.hint ? h('div', { className: 'mg-card-d' }, section.hint) : null,
+            { className: 'mg-sub' },
+            t(
+              '长期联想记忆：原始片段 → 带类型的记忆卡 → 实体页。下面的每一项都立即生效，不需要重启。',
+              'Long-term associative memory: raw episodes → typed cards → entity pages. Every knob below applies immediately, no restart.',
+            ),
           ),
-          h('div', { className: 'mg-rows' }, visibleFields(section).map(row)),
         ),
-      ),
 
-      h(
-        'div',
-        { className: 'mg-note' },
-        h(
-          'div',
-          null,
-          t(
-            '下面几项只在插件启动时读一次，因此不在这一页：总开关、记忆库目录、默认项目名、跨项目连接。改它们需要重载插件。',
-            'Not on this page, because the plugin reads them once while activating: the master switch, the vault directory, the default project tag and cross-project linking. Changing one reloads the plugin.',
+        ...SECTIONS.map((section) =>
+          h(
+            'section',
+            { key: section.id, className: 'mg-card' },
+            h(
+              'div',
+              { className: 'mg-card-h' },
+              h('div', { className: 'mg-card-t' }, section.title),
+              section.hint ? h('div', { className: 'mg-card-d' }, section.hint) : null,
+            ),
+            h('div', { className: 'mg-rows' }, visibleFields(section).map(row)),
           ),
         ),
+
         h(
           'div',
-          null,
-          t('改它们：profile 的 ', 'To change one, edit '),
-          h('span', { className: 'mg-code' }, 'cordis.patch.yml'),
-          t(' 里 ', ' in the profile and look for the '),
-          h('span', { className: 'mg-code' }, '- id: memory-graph'),
-          t(' 那一行的 config。', ' row, under config.'),
-        ),
-        h(
-          'div',
-          null,
-          t('当前记忆库：', 'Vault: '),
-          h('span', { className: 'mg-code' }, String(getPath(value, ['vaultDir']) || '')),
+          { className: 'mg-note' },
+          h(
+            'div',
+            null,
+            t(
+              '下面几项只在插件启动时读一次，因此不在这一页：总开关、记忆库目录、默认项目名、跨项目连接。改它们需要重载插件。',
+              'Not on this page, because the plugin reads them once while activating: the master switch, the vault directory, the default project tag and cross-project linking. Changing one reloads the plugin.',
+            ),
+          ),
+          h(
+            'div',
+            null,
+            t('改它们：profile 的 ', 'To change one, edit '),
+            h('span', { className: 'mg-code' }, 'cordis.patch.yml'),
+            t(' 里 ', ' in the profile and look for the '),
+            h('span', { className: 'mg-code' }, '- id: memory-graph'),
+            t(' 那一行的 config。', ' row, under config.'),
+          ),
+          h(
+            'div',
+            null,
+            t('当前记忆库：', 'Vault: '),
+            h('span', { className: 'mg-code' }, String(getPath(value, ['vaultDir']) || '')),
+          ),
         ),
       ),
 
