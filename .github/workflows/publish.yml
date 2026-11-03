@@ -73,11 +73,21 @@ jobs:
       - name: skip a version that is already on the registry
         id: guard
         run: |
-          $ver = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
           $already = $false
-          npm view "@ilaomianyang/dsh-memory-graph@$ver" version 2>$null | Out-Null
-          if ($LASTEXITCODE -eq 0) { $already = $true }
-          if ($already) { Write-Output "$ver is already published; re-running this tag is a no-op" }
+          # Ask the registry instead of `npm view`: for a version that does not
+          # exist yet npm exits 1, and the runner sets
+          # $PSNativeCommandUseErrorActionPreference = $true with
+          # $ErrorActionPreference = 'Stop', so that non-zero exit ends the step.
+          # That is how the first run of this workflow failed — on the check whose
+          # whole job is to discover "not published yet".
+          try {
+            $meta = Invoke-RestMethod -TimeoutSec 30 -Uri ("https://registry.npmjs.org/" + $pkg.name.Replace('/', '%2f'))
+            $already = $null -ne $meta.versions.($pkg.version)
+          } catch {
+            $already = $false
+          }
+          if ($already) { Write-Output "$($pkg.name)@$($pkg.version) is already published; re-running this tag is a no-op" }
           "skip=$($already.ToString().ToLower())" >> $env:GITHUB_OUTPUT
 
       - name: dry run — test and pack, publish nothing
