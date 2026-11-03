@@ -52,7 +52,9 @@
     "live": "node test/live.mjs",
     "live:supersede": "node test/live-supersede.mjs",
     "check": "node --check index.js",
-    "prepublishOnly": "npm test"
+    "preversion": "npm test",
+    "prepublishOnly": "npm test",
+    "release": "npm version patch -m \"chore(release): v%s\" && git push --follow-tags"
   },
   "dsh": {
     "bundle": {

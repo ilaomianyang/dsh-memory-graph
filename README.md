@@ -402,6 +402,33 @@ npm run live:supersede   # 真模型：先记一条，再让它被"更正"推翻
 
 它们从 `~/.dsh/.credentials.yaml` 或环境变量取 key（见下文），不写死、不落盘。这两个脚本跑在普通 `node` 进程里，没有 Harness 的 `llm` 服务可借，所以它们显式用 `transport: 'http'`；插件自己在界面里默认走 harness。
 
+## 发布
+
+版本号只有一个来源：`package.json` 的 `version`。发一个版本就等于打一个 tag：
+
+```bash
+npm run release        # = npm version patch（先跑测试）→ 提交 → tag → git push --follow-tags
+npm version minor -m "chore(release): v%s" && git push --follow-tags   # minor / major 换这个写法
+```
+
+推上去的 tag 会触发 `.github/workflows/publish.yml`，它只做四件事：
+
+1. 核对 tag 和 `package.json` 的版本号——不一致就失败，不会发出一个版本号对不上的包；
+2. 查这个版本是不是已经在注册表上——在就跳过，重推同一个 tag 是空操作而不是报错；
+3. `npm publish --provenance --access public`（`prepublishOnly` 会再跑一遍那 231 项，红的进不去）；
+4. npm 页面上多一条「Built and signed on GitHub Actions」，证明这个 tarball 是从这个仓库的这个提交构建的。
+
+需要在仓库里配一个 secret：**Settings → Secrets and variables → Actions → New repository secret**，名字 `NPM_TOKEN`。内容必须是 **Automation** 类型的 token（npmjs.com → Access Tokens → Generate New Token → Automation）：账号开了 2FA 时，普通的 Publish token 会被 `403 ... two-factor authentication ... required to publish` 挡回来，Automation token 天生绕过它。这个 token 只给 CI 用，不要写进 `.npmrc`。
+
+不想等 CI、或者 GitHub 那一刻连不上，就在本地发：
+
+```bash
+npm publish            # publishConfig 已经把 registry 钉在 npmjs，prepublishOnly 会跑测试
+git push --follow-tags # 别忘推 tag，否则 CI 里没有这次发布的记录
+```
+
+手动发过之后，CI 那条会命中第 2 步的跳过分支，不会再发一次。
+
 ## 蒸馏实测（真模型跑过，不是估计）
 
 用 `deepseek-chat`，`npm run live`：

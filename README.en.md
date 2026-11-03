@@ -409,6 +409,33 @@ node test/live.mjs --tokens 900                 # a small output cap, watch a tr
 
 They read the key from `~/.dsh/.credentials.yaml` or the environment (see above); nothing is hard-coded or persisted. Both run in a plain `node` process with no harness `llm` service to borrow, so they set `transport: 'http'` explicitly — the plugin's own default is `harness`.
 
+## Releasing
+
+There is one source of truth for the version: `version` in `package.json`. Releasing a version *is* pushing a tag:
+
+```bash
+npm run release        # = npm version patch (runs the suite first) → commit → tag → git push --follow-tags
+npm version minor -m "chore(release): v%s" && git push --follow-tags   # for minor / major
+```
+
+The tag triggers `.github/workflows/publish.yml`, which does four things:
+
+1. checks that the tag and `package.json` agree — a mismatch fails instead of publishing a package whose version lies;
+2. checks whether that version is already on the registry — if so it skips, so re-running a tag is a no-op rather than an error;
+3. `npm publish --provenance --access public` (`prepublishOnly` runs the 231 checks again; a red build cannot reach the registry);
+4. adds "Built and signed on GitHub Actions" to the npm page, proving the tarball came from this commit of this repository.
+
+It needs one secret in the repository: **Settings → Secrets and variables → Actions → New repository secret**, named `NPM_TOKEN`. The value has to be an **Automation** token (npmjs.com → Access Tokens → Generate New Token → Automation): with 2FA on the account, an ordinary Publish token is rejected with `403 ... two-factor authentication ... required to publish`, while an Automation token bypasses it by design. That token is for CI only — keep it out of `.npmrc`.
+
+To publish locally instead (no CI, or GitHub is unreachable that minute):
+
+```bash
+npm publish            # publishConfig pins the registry to npmjs; prepublishOnly runs the tests
+git push --follow-tags # push the tag too, or CI has no record of this release
+```
+
+After a manual publish, the CI path hits the skip branch in step 2 and will not publish twice.
+
 ## Distillation, measured (real runs, not estimates)
 
 With `deepseek-chat` via `npm run live`:

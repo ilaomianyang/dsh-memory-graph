@@ -18,6 +18,11 @@
 
 - README 两版新增「从 npm 装」：`plugin_manager action=install_bundle target="@ilaomianyang/dsh-memory-graph"`，并给出国内走 `registry="https://registry.npmmirror.com/"` 的写法（镜像自动同步 npm，滞后几分钟到几小时）。
 
+**Added（发布流水线）**
+
+- `.github/workflows/publish.yml`：推 `v*` tag 就发布，不再靠本机 `npm publish`。它会核对 tag 与 `package.json`、跳过已发布的版本（重推 tag 是空操作）、`npm publish --provenance`，并在 npm 页面上留一条「Built and signed on GitHub Actions」。凭据是仓库 secret `NPM_TOKEN`（必须是 Automation token，账号开着 2FA 时普通 Publish token 会被 403 挡掉）。
+- `npm run release`：先跑测试、再 bump、提交、打 tag、推 tag 的一条命令；README 两版都加了「发布」一节。
+
 **Removed**
 
 - `package-lock.json`：里面还写着 `@local/dsh-memory-graph`（第一次本地装时的残留），且只有一个依赖，留着只会误导。
