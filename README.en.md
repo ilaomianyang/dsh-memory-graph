@@ -336,20 +336,24 @@ A session file is a **concatenated zstd container** (one frame per appended batc
 
 `memory_stats` tells you where the vault is; in its root there is also **`graph.html`** — double-click it, nothing to install, no server:
 
-![The memory graph: entities are hubs, cards are neurons](docs/graph-light.png)
+![The memory graph: a neuron cloud you can turn](docs/graph-dark.png)
 
-- **Entities are the large dark hubs** (`infra`, `deepseek`, `blog-engine`, `memory-graph`…), sized by how often they are mentioned — the cross-project ones stand out immediately.
-- **Cards are the small coloured dots**, coloured by kind: decision / fact / open question / preference / note.
-- **Dashed edges are replaced memories** (`superseded`), so you can see where the record changed its mind; retracted cards stay visible, greyed out.
-- Search by title / entity / id, filter by project, click a card for its detail, hover to highlight one-hop neighbours, scroll to zoom, drag the background to pan, `Esc` to clear.
-- Follows the system light/dark setting; you can also open `#dark`, `#light`, or `#dark&<card id|entity slug>` to pin the theme and jump to one card.
+- **It is three-dimensional**: not a flat chart but a nebula with depth. Drag and the cloud turns — memories behind come forward, the ones in front recede and shrink. Scroll to push in, double-click to go back to the starting angle.
+- **Every memory is a neuron**: a white-hot core, a halo in its own colour, a few curved dendrites. The colour is the kind: decision (violet) / fact (teal) / open question (magenta) / preference (amber) / note (green).
+- **Entities are the paler hubs** (`infra`, `deepseek`, `blog-engine`, `memory-graph`…), sized by how often they are mentioned. A hub takes its colour from the memories around it, so you can see at a glance which region it belongs to; the cross-project ones carry an extra mark.
+- **Memories of one kind gather into a region**, and each region floats its own faint name (decisions / facts / preferences / notes / open questions) — that is a place, not a node.
+- **Hairlines mean "they showed up in the same memory"**: the short ones tie a card to its entity, the few long ones cross whole regions. Dashed = replaced (`superseded`), so you can see where the record changed its mind; retracted cards stay visible, greyed out.
+- Search by title / entity / id, filter by project, click a neuron for its detail (it and its neighbours light up, the rest recedes), hover for a hint, `Esc` to clear.
+- Follows the system light/dark setting (dark is glow on black, light is coloured dots on paper); you can also open `#dark`, `#light`, `#still` (stop the slow rotation), or `#dark&<card id|entity slug>` to pin the theme and jump to one neuron.
 - Redrawn after every `memory_remember` / `memory_forget` / `memory_distill`. An empty vault and a one-card vault both render something readable instead of a blank page.
 
-It is **one self-contained HTML file**: no CDN, no framework, no build step, no network requests — the data is inlined at render time. 38 cards → 101 KB. Delete it if you like; the next write regenerates it.
+Light:
 
-Dark:
+![The memory graph in light mode](docs/graph-light.png)
 
-![The memory graph in dark mode](docs/graph-dark.png)
+It is **one self-contained HTML file**: no CDN, no three.js, no framework, no build step, no network requests — the perspective projection and the glow are hand-written canvas 2D, and the data is inlined at render time. 168 cards + 332 entities → 382 KB. Delete it if you like; the next write regenerates it.
+
+Positions are **computed and replayable**: the 3D force layout is seeded from a hash of each card key, so drawing the same vault twice puts every neuron in the same place — two renders of one vault differ only in the timestamp (there is a test watching that).
 
 One honest limit: `graph.html` is a **static snapshot of the whole vault** — double-click it, no harness needed. "What did *this* conversation remember?" is a different picture, and it lives in the GUI: see the next section.
 
@@ -361,8 +365,7 @@ If you would rather not go looking through the vault folder, the plugin register
 - Two buttons in the bar: **Refresh** (redraw, picking up cards written a moment ago) and **Open in a window** (the same page in a real browser window, where the graph gets the whole screen).
 - Read-only and free: the route reads cards and entity pages off disk. It writes nothing and calls no model. `X-Frame-Options: SAMEORIGIN`, so only the app itself can frame it.
 - The vault directory **never** reaches the browser — the panel fetches a route, not a file path.
-
-![The Memory Graph panel: the whole-vault graph embedded in the app](docs/vault-panel.png)
+- What you see there is the picture above (same HTML, same perspective camera), only in a narrower window: at sidebar size the cloud shrinks to fit and the labels drop to six or fewer, so nothing turns into porridge.
 
 ## The Memory tab in the GUI
 

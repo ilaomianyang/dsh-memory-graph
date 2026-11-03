@@ -6,20 +6,31 @@
  * works; zip the vault and it still works. Nothing is fetched, so the page says
  * the same thing offline ten years from now.
  *
- * Layout is computed here, in Node, from the vault content: the page opens
- * already settled instead of animating from a random pile, and two runs over
- * the same vault produce the same picture (byte for byte, generation stamp
- * aside). The browser side only draws, filters and hit-tests.
+ * Layout is computed here, in Node, in three dimensions: every memory kind is
+ * pulled toward a fixed direction of its own, so the vault fans out into slices
+ * the way a stained neuron culture does, and entities settle in the seams
+ * between the slices because they are pulled at the centroid of the cards that
+ * mention them. Two runs over the same vault produce the same cloud (byte for
+ * byte, generation stamp aside) — no Math.random, no wall clock, fixed
+ * iteration count.
+ *
+ * The browser side owns the camera: it projects the cloud with a perspective
+ * divide, sorts by depth and draws it with additive halos on a canvas. Rotation
+ * is real rotation of real 3D points, which is why the parallax between front
+ * and back cells reads as depth instead of as a z-index trick.
  */
 import crypto from 'node:crypto'
 
-/** Five card kinds, one hue each. Entity nodes get their own near-white. */
+/**
+ * Five card kinds, one hue each: cool, dark-background glow tones taken from
+ * the reference culture dish. Entity cells get their own near-white.
+ */
 export const KIND_COLORS = {
-  decision: '#6ee7b7',
-  fact: '#7dd3fc',
-  open_question: '#fbbf24',
-  preference: '#c4b5fd',
-  note: '#94a3b8',
+  decision: '#a78bfa',
+  fact: '#2ee0d0',
+  open_question: '#e879f9',
+  preference: '#fb923c',
+  note: '#34d399',
 }
 
 const KIND_LABELS = {
@@ -30,17 +41,48 @@ const KIND_LABELS = {
   note: '记录 note',
 }
 
-// The legend sits in a status bar below the canvas, so the only thing the
-// layout has to keep clear at the bottom is the frame itself.
-const VIEW = { width: 1400, height: 860, pad: 70, reserveBottom: 16 }
+/** The faint names that float beside each slice in the cloud. */
+const KIND_SHORT = {
+  decision: '决策记忆',
+  fact: '事实知识',
+  open_question: '未决疑问',
+  preference: '偏好态度',
+  note: '工作记录',
+  entity: '实体枢纽',
+}
 
-const LABEL_FONT = { card: 10.5, entity: 11.5 }
-const LABEL_MAX = { card: 126, entity: 138 }
+/**
+ * One fixed direction per kind. These are constants, not seeds: the slices are
+ * always in the same place relative to each other, so two vaults look like
+ * siblings and the same vault looks identical twice. Mostly horizontal, so the
+ * cloud fills a wide frame instead of a tall one.
+ */
+const CLUSTER_DIR = {
+  decision: [-0.82, -0.56, 0.32],
+  fact: [0.78, -0.44, 0.5],
+  open_question: [0.06, 0.94, -0.42],
+  preference: [-0.56, 0.62, -0.58],
+  note: [0.44, -0.06, -0.86],
+  entity: [0, 0, 0],
+}
+
+const WORLD = {
+  /** The cloud is normalised to this radius; x is stretched so it reads wide. */
+  stretchX: 1.5,
+  /** Fixed, so the picture is a pure function of the vault. */
+  iterations: 240,
+  /** Linked cells want to sit about this far apart (normalised units). */
+  linkLength: 0.21,
+  /** Repulsion is cut off here; beyond it the pair force is zero. */
+  cutoff: 0.6,
+  /** Two cells never share a spot: hard floor for the separation pass. */
+  separation: 0.085,
+}
 
 /* ---------------------------------------------------------------- helpers */
 
-function round1(n) {
-  return Math.round(n * 10) / 10
+function round4(n) {
+  return Math.round(n * 10000) / 10000
 }
 
 function clampText(text, max) {
@@ -51,10 +93,8 @@ function clampText(text, max) {
 
 /**
  * Rough advance width, no font metrics in Node: CJK is full-width, latin about
- * 0.6em (system-ui at 10.5px averages a bit wider than the classic 0.5em).
- * Baked label boxes only need to be close, not exact — they are used to avoid
- * collisions, and the browser strokes every label with the page colour so a
- * couple of pixels of drift stay readable.
+ * 0.6em. Only used to pre-truncate the label baked into the payload — the
+ * browser measures for real before it draws.
  */
 function textWidth(text, size) {
   let width = 0
@@ -99,12 +139,18 @@ function makeRng(seed) {
   }
 }
 
+/**
+ * Radii are world units, not pixels: the browser multiplies them by the same
+ * perspective factor as the position, so a cell shrinks as it recedes. The
+ * numbers are tuned so a leaf card lands around 5 px and a busy hub around
+ * 17 px on an 860 px tall canvas at rest.
+ */
 function cardRadius(degree) {
-  return round1(5.4 + Math.min(4.2, Math.sqrt(degree) * 1.7))
+  return round4(0.0052 + Math.min(0.0050, Math.sqrt(degree) * 0.0013))
 }
 
 function entityRadius(degree) {
-  return round1(8.5 + Math.min(10.5, Math.sqrt(degree) * 2.2))
+  return round4(0.0115 + Math.min(0.0125, Math.sqrt(degree) * 0.0029))
 }
 
 /* ---------------------------------------------------------------- model */
@@ -119,6 +165,9 @@ function buildModel({ cards, entities, projects }) {
       key: `e:${entity.slug}`,
       type: 'entity',
       kind: 'entity',
+      // Entities are not a memory kind, so they are not pulled to a slice: the
+      // cards that mention them decide where they land.
+      cluster: 'entity',
       label: String(entity.name ?? entity.slug),
       slug: entity.slug,
       degree: 0,
@@ -139,10 +188,12 @@ function buildModel({ cards, entities, projects }) {
   }
 
   for (const card of cards) {
+    const kind = String(card.kind ?? 'note')
     const node = {
       key: `c:${card.id}`,
       type: 'card',
-      kind: String(card.kind ?? 'note'),
+      kind,
+      cluster: CLUSTER_DIR[kind] ? kind : 'note',
       label: String(card.title ?? '（无标题 untitled）'),
       id: card.id,
       project: card.project ?? 'shared',
@@ -195,9 +246,38 @@ function buildModel({ cards, entities, projects }) {
     old.degree += 1
   }
 
+  // An entity is not a memory kind, but a cloud where two thirds of the cells are
+  // pale white is a cloud of white dots. Each one takes the kind of the cards that
+  // mention it, so a hub glows in the colour of the region it lives in.
+  const kindTally = new Map()
+  for (const link of links) {
+    if (link.k !== 'mention') continue
+    const entity = bySlug.get(link.t.slice(2))
+    const card = byId.get(link.s.slice(2))
+    if (!entity || !card) continue
+    const bucket = kindTally.get(entity.key) ?? {}
+    bucket[card.kind] = (bucket[card.kind] ?? 0) + 1
+    kindTally.set(entity.key, bucket)
+  }
+
+  for (const node of nodes) {
+    if (node.type === 'entity') {
+      const bucket = kindTally.get(node.key)
+      let best = null
+      let bestCount = 0
+      for (const kind of Object.keys(bucket ?? {})) {
+        if (bucket[kind] > bestCount) {
+          best = kind
+          bestCount = bucket[kind]
+        }
+      }
+      if (best) node.kind = best
+    }
+  }
+
   for (const node of nodes) {
     node.r = node.type === 'entity' ? entityRadius(node.degree) : cardRadius(node.degree)
-    node.haloScale = node.type === 'entity' ? 2.5 : 2.7
+    node.haloScale = node.type === 'entity' ? 3.6 : 4.2
     // A hub is an entity that only exists because several projects share it.
     node.hub = node.type === 'entity' && node.projects.length >= 2
     node.projects.sort()
@@ -218,28 +298,48 @@ function buildModel({ cards, entities, projects }) {
 /* ---------------------------------------------------------------- layout */
 
 /**
- * Fruchterman–Reingold relaxation with a gravity term: springs along links,
- * inverse-distance repulsion between every pair, a stronger pull to the middle
- * for entity nodes so the things that many cards share end up in the centre.
- * Deterministic (phyllotaxis start, no wall clock, no Math.random).
+ * Deterministic 3D force layout.
+ *
+ * Three forces plus one pass:
+ *   - springs along links, so a card stays near the entities it mentions;
+ *   - short-range repulsion with a cutoff, so cells breathe without paying an
+ *     O(n^2) bill for the pairs that are already far apart;
+ *   - a pull toward its kind's fixed direction (cards) or toward the centroid of
+ *     its neighbours (entities) — this is what turns a ball into slices;
+ *   - a hard separation pass, so no two cells occupy the same point.
+ *
+ * Everything is seeded from a hash of the node keys, so the same vault always
+ * settles into the same cloud.
  */
-function layoutGraph(nodes, links) {
-  const { width, height } = VIEW
+function layoutGraph3D(nodes, links) {
   const n = nodes.length
+  if (n === 0) return
   const index = new Map(nodes.map((node, i) => [node.key, i]))
-  const xs = new Float64Array(n)
-  const ys = new Float64Array(n)
-  const dxs = new Float64Array(n)
-  const dys = new Float64Array(n)
+  const px = new Float64Array(n)
+  const py = new Float64Array(n)
+  const pz = new Float64Array(n)
+  const fx = new Float64Array(n)
+  const fy = new Float64Array(n)
+  const fz = new Float64Array(n)
   const rng = makeRng(hashString(nodes.map((node) => node.key).join('|')))
 
-  // Golden-angle spiral: evenly spaced, no clusters to untangle first.
-  const spread = Math.min(width, height) * 0.34
+  const perCluster = new Map()
+  for (const node of nodes) perCluster.set(node.cluster, (perCluster.get(node.cluster) ?? 0) + 1)
+
+  // Seed each cell inside its own slice: the cluster pull only has to tidy up,
+  // not to invent the fan from a featureless ball.
+  const slots = new Map()
   for (let i = 0; i < n; i++) {
-    const angle = i * 2.399963229728653
-    const radius = spread * Math.sqrt((i + 0.5) / Math.max(1, n))
-    xs[i] = width / 2 + Math.cos(angle) * radius
-    ys[i] = height / 2 + Math.sin(angle) * radius * 0.82
+    const node = nodes[i]
+    const dir = CLUSTER_DIR[node.cluster] ?? [0, 0, 0]
+    const slot = (slots.get(node.cluster) ?? 0) + 1
+    slots.set(node.cluster, slot)
+    const total = perCluster.get(node.cluster) ?? 1
+    const ring = 0.1 + 0.34 * Math.sqrt(slot / total)
+    const angle = slot * 2.399963229728653 + (hashString(node.key) % 1000) / 159.15
+    px[i] = dir[0] * 0.6 + Math.cos(angle) * ring + (rng() - 0.5) * 0.05
+    py[i] = dir[1] * 0.6 + Math.sin(angle) * ring * 0.78 + (rng() - 0.5) * 0.05
+    pz[i] = dir[2] * 0.6 + Math.cos(angle * 1.618) * ring + (rng() - 0.5) * 0.05
   }
 
   const edges = []
@@ -247,238 +347,193 @@ function layoutGraph(nodes, links) {
     const a = index.get(link.s)
     const b = index.get(link.t)
     if (a === undefined || b === undefined) continue
-    edges.push([a, b, link.k === 'supersede' ? 1.35 : 1])
+    edges.push([a, b, link.k === 'supersede' ? 1.3 : 1])
   }
 
-  // Fruchterman–Reingold wants an ideal edge length that grows as the frame gets
-  // emptier, which is right for big graphs and absurd for small ones: two cells
-  // would be flung to opposite corners. Hence the ceiling.
-  const ideal = Math.min(132, 1.05 * Math.sqrt((width * height) / Math.max(8, n)))
-  let temperature = ideal * 0.9
-  const iterations = 460
+  // Entity -> the cards that mention it. Recomputed every iteration from the
+  // current positions: cheap (O(edges)) and it lets a shared entity slide into
+  // the seam between two slices instead of picking one.
+  const entityLinks = []
+  for (let i = 0; i < n; i++) if (nodes[i].type === 'entity') entityLinks.push(i)
 
-  for (let iter = 0; iter < iterations; iter++) {
-    dxs.fill(0)
-    dys.fill(0)
+  const cut2 = WORLD.cutoff * WORLD.cutoff
+  const k2 = 0.055 * 0.055
+  let temperature = 0.34
+
+  for (let iter = 0; iter < WORLD.iterations; iter++) {
+    fx.fill(0)
+    fy.fill(0)
+    fz.fill(0)
 
     for (let i = 0; i < n; i++) {
+      const xi = px[i]
+      const yi = py[i]
+      const zi = pz[i]
       for (let j = i + 1; j < n; j++) {
-        let dx = xs[i] - xs[j]
-        let dy = ys[i] - ys[j]
-        let d2 = dx * dx + dy * dy
-        if (d2 < 0.02) {
-          dx = (rng() - 0.5) * 0.6
-          dy = (rng() - 0.5) * 0.6
-          d2 = dx * dx + dy * dy + 0.02
+        let dx = xi - px[j]
+        let dy = yi - py[j]
+        let dz = zi - pz[j]
+        const d2 = dx * dx + dy * dy + dz * dz
+        if (d2 > cut2) continue
+        if (d2 < 1e-6) {
+          dx = (rng() - 0.5) * 0.01
+          dy = (rng() - 0.5) * 0.01
+          dz = (rng() - 0.5) * 0.01
         }
-        const d = Math.sqrt(d2)
-        const force = (ideal * ideal) / d
+        const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 0.001
+        // Linear fade to zero at the cutoff keeps the force continuous.
+        const force = (k2 / (d * d)) * (1 - d / WORLD.cutoff) * 0.0001
         const ux = dx / d
         const uy = dy / d
-        dxs[i] += ux * force
-        dys[i] += uy * force
-        dxs[j] -= ux * force
-        dys[j] -= uy * force
+        const uz = dz / d
+        fx[i] += ux * force
+        fy[i] += uy * force
+        fz[i] += uz * force
+        fx[j] -= ux * force
+        fy[j] -= uy * force
+        fz[j] -= uz * force
       }
     }
 
     for (const [a, b, weight] of edges) {
-      const dx = xs[a] - xs[b]
-      const dy = ys[a] - ys[b]
-      const d = Math.sqrt(dx * dx + dy * dy) || 0.01
-      const force = ((d * d) / ideal) * 0.82 * weight
+      const dx = px[b] - px[a]
+      const dy = py[b] - py[a]
+      const dz = pz[b] - pz[a]
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 0.001
+      const force = (d - WORLD.linkLength * weight) * 0.42
       const ux = dx / d
       const uy = dy / d
-      dxs[a] -= ux * force
-      dys[a] -= uy * force
-      dxs[b] += ux * force
-      dys[b] += uy * force
+      const uz = dz / d
+      fx[a] += ux * force
+      fy[a] += uy * force
+      fz[a] += uz * force
+      fx[b] -= ux * force
+      fy[b] -= uy * force
+      fz[b] -= uz * force
     }
 
     for (let i = 0; i < n; i++) {
-      // Entities are the hubs: hold them near the middle so cards ring them.
-      const gravity = nodes[i].type === 'entity' ? 0.19 : 0.062
-      dxs[i] += (width / 2 - xs[i]) * gravity
-      dys[i] += (height / 2 - ys[i]) * gravity
-    }
-
-    for (let i = 0; i < n; i++) {
-      const d = Math.sqrt(dxs[i] * dxs[i] + dys[i] * dys[i]) || 1
-      const step = Math.min(d, temperature)
-      xs[i] += (dxs[i] / d) * step
-      ys[i] += (dys[i] / d) * step
-    }
-
-    // Hard separation: two nodes never share a spot, whatever the forces say.
-    for (let i = 0; i < n; i++) {
-      for (let j = i + 1; j < n; j++) {
-        const min = nodes[i].r + nodes[j].r + 15
-        let dx = xs[j] - xs[i]
-        let dy = ys[j] - ys[i]
-        let d = Math.sqrt(dx * dx + dy * dy)
-        if (d >= min) continue
-        if (d < 0.01) {
-          dx = rng() - 0.5
-          dy = rng() - 0.5
-          d = Math.sqrt(dx * dx + dy * dy) || 0.01
+      const node = nodes[i]
+      if (node.type === 'card') {
+        const dir = CLUSTER_DIR[node.cluster] ?? [0, 0, 0]
+        fx[i] += (dir[0] * 1.06 - px[i]) * 0.062
+        fy[i] += (dir[1] * 1.06 - py[i]) * 0.062
+        fz[i] += (dir[2] * 1.06 - pz[i]) * 0.062
+      } else {
+        // Centroid of the neighbours, not of the whole graph.
+        const around = node.around ?? []
+        if (around.length > 0) {
+          let sx = 0
+          let sy = 0
+          let sz = 0
+          for (const other of around) {
+            sx += px[other]
+            sy += py[other]
+            sz += pz[other]
+          }
+          const inv = 1 / around.length
+          fx[i] += (sx * inv - px[i]) * 0.16
+          fy[i] += (sy * inv - py[i]) * 0.16
+          fz[i] += (sz * inv - pz[i]) * 0.16
         }
-        const push = (min - d) / 2
-        xs[i] -= (dx / d) * push
-        ys[i] -= (dy / d) * push
-        xs[j] += (dx / d) * push
-        ys[j] += (dy / d) * push
+      }
+      // Weak gravity: without it the slices drift apart into a flat pancake.
+      fx[i] -= px[i] * 0.014
+      fy[i] -= py[i] * 0.014
+      fz[i] -= pz[i] * 0.014
+    }
+
+    for (let i = 0; i < n; i++) {
+      const d = Math.sqrt(fx[i] * fx[i] + fy[i] * fy[i] + fz[i] * fz[i]) || 1
+      const step = Math.min(d, temperature)
+      px[i] += (fx[i] / d) * step
+      py[i] += (fy[i] / d) * step
+      pz[i] += (fz[i] / d) * step
+    }
+
+    // Hard separation every few iterations, so the cloud never has to untangle
+    // a pile of coincident cells at the end.
+    if (iter % 5 === 4) {
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          const min = WORLD.separation
+          let dx = px[j] - px[i]
+          let dy = py[j] - py[i]
+          let dz = pz[j] - pz[i]
+          const d2 = dx * dx + dy * dy + dz * dz
+          if (d2 >= min * min) continue
+          if (d2 < 1e-8) {
+            dx = (rng() - 0.5) * 0.02
+            dy = (rng() - 0.5) * 0.02
+            dz = (rng() - 0.5) * 0.02
+          }
+          const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 0.001
+          const push = (min - d) / 2
+          px[i] -= (dx / d) * push
+          py[i] -= (dy / d) * push
+          pz[i] -= (dz / d) * push
+          px[j] += (dx / d) * push
+          py[j] += (dy / d) * push
+          pz[j] += (dz / d) * push
+        }
       }
     }
 
-    temperature = Math.max(0.6, temperature * 0.986)
+    temperature = Math.max(0.012, temperature * 0.978)
   }
 
-  // Fit into the padded frame. The two axes are allowed to stretch by different
-  // amounts (capped): a round cloud would leave the wide frame half empty, and
-  // stretching positions — never the circles — keeps every node perfectly round.
-  let minX = Infinity
-  let minY = Infinity
-  let maxX = -Infinity
-  let maxY = -Infinity
+  // Normalise: centre on the middle of the bounding box (not the centroid — a
+  // dense knot on one side would push the cloud off the middle of the frame),
+  // then scale each axis to its own target so the browser only has to know the
+  // world is a box about 2.5 x 1.9 x 1.6 units.
+  let x0 = Infinity
+  let x1 = -Infinity
+  let y0 = Infinity
+  let y1 = -Infinity
+  let z0 = Infinity
+  let z1 = -Infinity
   for (let i = 0; i < n; i++) {
-    minX = Math.min(minX, xs[i] - nodes[i].r)
-    maxX = Math.max(maxX, xs[i] + nodes[i].r)
-    minY = Math.min(minY, ys[i] - nodes[i].r)
-    maxY = Math.max(maxY, ys[i] + nodes[i].r)
+    x0 = Math.min(x0, px[i])
+    x1 = Math.max(x1, px[i])
+    y0 = Math.min(y0, py[i])
+    y1 = Math.max(y1, py[i])
+    z0 = Math.min(z0, pz[i])
+    z1 = Math.max(z1, pz[i])
   }
-  const boxW = VIEW.width - VIEW.pad * 2
-  // The legend and the hint live in a strip along the bottom edge; nodes are
-  // kept out of it so a cluster can never end up behind the legend box.
-  const boxH = VIEW.height - VIEW.pad - VIEW.reserveBottom
-  const spanW = Math.max(1, maxX - minX)
-  const spanH = Math.max(1, maxY - minY)
-  const scaleX = Math.min(boxW / spanW, 1.45)
-  const scaleY = Math.min(boxH / spanH, 1.35)
-  const radiusScale = Math.min(1.3, Math.max(0.9, Math.sqrt(scaleX * scaleY)))
-  const offsetX = VIEW.pad + (boxW - spanW * scaleX) / 2
-  const offsetY = VIEW.pad + (boxH - spanH * scaleY) / 2
+  const cx = (x0 + x1) / 2
+  const cy = (y0 + y1) / 2
+  const cz = (z0 + z1) / 2
+  // The force layout has no reason to fill a box, so normalise each axis to its
+  // own target instead of to one sphere: the cloud then fills a 16:9 frame (and
+  // the narrow sidebar iframe) no matter how the slices happened to settle.
+  const axis = (lo, hi, target) => {
+    const half = Math.max((hi - lo) / 2, 1e-6)
+    return target / half
+  }
+  const sx = axis(x0, x1, 1.25)
+  const sy = axis(y0, y1, 0.95)
+  const sz = axis(z0, z1, 0.8)
 
   for (let i = 0; i < n; i++) {
-    nodes[i].x = round1(offsetX + (xs[i] - minX) * scaleX)
-    nodes[i].y = round1(offsetY + (ys[i] - minY) * scaleY)
-    nodes[i].r = round1(nodes[i].r * radiusScale)
+    nodes[i].x = round4((px[i] - cx) * sx)
+    nodes[i].y = round4((py[i] - cy) * sy)
+    nodes[i].z = round4((pz[i] - cz) * sz)
   }
-
-  // The radii that were just applied are not the ones the span above was
-  // measured with, so the outermost cells can poke a few pixels past the
-  // padding. Re-measure with the real circles and pull the picture back in —
-  // positions shrink, circles never do.
-  const frame = {
-    x0: VIEW.pad,
-    x1: VIEW.width - VIEW.pad,
-    y0: VIEW.pad,
-    y1: VIEW.height - VIEW.reserveBottom,
-  }
-  let bx0 = Infinity
-  let bx1 = -Infinity
-  let by0 = Infinity
-  let by1 = -Infinity
-  for (let i = 0; i < n; i++) {
-    bx0 = Math.min(bx0, nodes[i].x - nodes[i].r)
-    bx1 = Math.max(bx1, nodes[i].x + nodes[i].r)
-    by0 = Math.min(by0, nodes[i].y - nodes[i].r)
-    by1 = Math.max(by1, nodes[i].y + nodes[i].r)
-  }
-  if (bx0 < frame.x0 || bx1 > frame.x1 || by0 < frame.y0 || by1 > frame.y1) {
-    const shrink = Math.min(
-      (frame.x1 - frame.x0) / Math.max(1, bx1 - bx0),
-      (frame.y1 - frame.y0) / Math.max(1, by1 - by0),
-      1,
-    )
-    const cx = (bx0 + bx1) / 2
-    const cy = (by0 + by1) / 2
-    const tx = (frame.x0 + frame.x1) / 2
-    const ty = (frame.y0 + frame.y1) / 2
-    for (let i = 0; i < n; i++) {
-      nodes[i].x = round1(tx + (nodes[i].x - cx) * shrink)
-      nodes[i].y = round1(ty + (nodes[i].y - cy) * shrink)
-    }
-  }
-}
-
-/* ---------------------------------------------------------------- labels */
-
-function overlaps(a, b) {
-  return !(a.x1 <= b.x0 || b.x1 <= a.x0 || a.y1 <= b.y0 || b.y1 <= a.y0)
 }
 
 /**
- * Greedy label placement: ten preferred offsets around the node, biggest nodes
- * first. A label that fits nowhere is kept but hidden by default (hover,
- * selection and search reveal it), which is what keeps the picture from turning
- * into a plate of confetti once a vault has fifty entities.
+ * Adjacency the layout needs: an entity is pulled to the centroid of the cards
+ * that mention it. Built before the layout runs, because the pull is part of it.
  */
-function placeLabels(nodes) {
-  const bodies = nodes.map((node) => ({
-    node,
-    box: {
-      x0: node.x - node.r - 2,
-      x1: node.x + node.r + 2,
-      y0: node.y - node.r - 2,
-      y1: node.y + node.r + 2,
-    },
-  }))
-  const taken = []
-
-  const ordered = nodes
-    .slice()
-    .sort((a, b) => {
-      if (a.type !== b.type) return a.type === 'entity' ? -1 : 1
-      return b.degree - a.degree
-    })
-
-  const floor = VIEW.height - VIEW.reserveBottom - 6
-
-  for (const node of ordered) {
-    const size = node.type === 'entity' ? LABEL_FONT.entity : LABEL_FONT.card
-    const text = truncateToWidth(node.label, size, node.type === 'entity' ? LABEL_MAX.entity : LABEL_MAX.card)
-    node.short = text
-    const width = textWidth(text, size) + 10
-    const candidates = [
-      { dx: 0, dy: node.r + 10, anchor: 'middle' },
-      { dx: 0, dy: -(node.r + 8), anchor: 'middle' },
-      { dx: node.r + 7, dy: 1, anchor: 'start' },
-      { dx: -(node.r + 7), dy: 1, anchor: 'end' },
-      { dx: 0, dy: node.r + 24, anchor: 'middle' },
-      { dx: 0, dy: -(node.r + 22), anchor: 'middle' },
-      { dx: node.r + 7, dy: -(node.r * 0.6 + 5), anchor: 'start' },
-      { dx: node.r + 7, dy: node.r * 0.6 + 6, anchor: 'start' },
-      { dx: -(node.r + 7), dy: -(node.r * 0.6 + 5), anchor: 'end' },
-      { dx: -(node.r + 7), dy: node.r * 0.6 + 6, anchor: 'end' },
-    ]
-
-    let placed = null
-    for (const candidate of candidates) {
-      const x = node.x + candidate.dx
-      const y = node.y + candidate.dy
-      const left = candidate.anchor === 'start' ? x : candidate.anchor === 'end' ? x - width : x - width / 2
-      // y is the text baseline, so the box is lopsided: cap height above the
-      // baseline, descender below it. Inflated a little on top of that, because
-      // the width estimate can be off by a pixel or two per glyph run.
-      const box = {
-        x0: left - 1.5,
-        x1: left + width + 1.5,
-        y0: y - size * 0.84 - 1.5,
-        y1: y + size * 0.24 + 1.5,
-      }
-      // Never let a label run off the frame: the page clips, and half a word is
-      // worse than no word.
-      if (box.x0 < 10 || box.x1 > VIEW.width - 10 || box.y0 < 8 || box.y1 > floor) continue
-      if (taken.some((other) => overlaps(box, other))) continue
-      // Other nodes are hard obstacles; the node this label belongs to is not,
-      // otherwise every candidate would collide with its own cell body.
-      if (bodies.some((entry) => entry.node !== node && overlaps(box, entry.box))) continue
-      taken.push(box)
-      placed = { x: round1(x), y: round1(y), anchor: candidate.anchor, on: true }
-      break
-    }
-
-    node.labelPos = placed ?? { x: round1(node.x), y: round1(node.y + node.r + 11), anchor: 'middle', on: false }
+function attachNeighborhoods(nodes, links) {
+  const index = new Map(nodes.map((node, i) => [node.key, i]))
+  for (const node of nodes) node.around = []
+  for (const link of links) {
+    const a = index.get(link.s)
+    const b = index.get(link.t)
+    if (a === undefined || b === undefined) continue
+    if (nodes[a].type === 'entity') nodes[a].around.push(b)
+    if (nodes[b].type === 'entity') nodes[b].around.push(a)
   }
 }
 
@@ -486,25 +541,29 @@ function placeLabels(nodes) {
 
 function toPayload({ cards, entities, projects, generatedAt }) {
   const model = buildModel({ cards, entities, projects })
-  layoutGraph(model.nodes, model.links)
-  placeLabels(model.nodes)
+  attachNeighborhoods(model.nodes, model.links)
+  layoutGraph3D(model.nodes, model.links)
 
   const nodes = model.nodes.map((node) => {
     const base = {
       key: node.key,
       type: node.type,
       kind: node.kind,
-      label: node.short ?? node.label,
+      cluster: node.cluster,
+      // Pre-truncated for the common case; the browser re-measures before it
+      // draws and hides whatever does not fit instead of overlapping it.
+      label: truncateToWidth(node.label, node.type === 'entity' ? 11.5 : 10.5, node.type === 'entity' ? 138 : 126),
       full: node.label,
       x: node.x,
       y: node.y,
+      z: node.z,
+      // World radius: the renderer multiplies it by the same perspective factor
+      // as the position, which is what makes distant cells smaller.
       r: node.r,
-      // The renderer draws the halo at r * haloScale; leaving this out of the
-      // payload made that multiplication NaN and every halo a `r="NaN"` circle.
+      // The renderer draws the halo at r * haloScale.
       haloScale: node.haloScale,
       degree: node.degree,
       projects: node.projects,
-      labelAt: node.labelPos,
     }
     if (node.type === 'entity') {
       return {
@@ -543,10 +602,21 @@ function toPayload({ cards, entities, projects, generatedAt }) {
     retracted: cards.filter((card) => card.status === 'retracted').length,
   }
 
+  // The 90th-percentile distance from the centre. The renderer fits the cloud to
+  // the frame with it: a bounding sphere would leave a fifth of the frame empty
+  // because a handful of outliers sit far out, and this survives rotation, so the
+  // view does not breathe while the cloud turns.
+  const distances = nodes
+    .map((node) => Math.hypot(node.x, node.y, node.z))
+    .sort((a, b) => a - b)
+  const radius90 = round4(distances.length ? distances[Math.floor(distances.length * 0.9)] ?? distances.at(-1) : 1)
+
   return {
     generatedAt,
     counts,
     kinds: KIND_LABELS,
+    short: KIND_SHORT,
+    radius90: radius90 > 0 ? radius90 : 1,
     nodes,
     links: model.links,
     projects: model.projectList,
@@ -563,46 +633,46 @@ function toPayload({ cards, entities, projects, generatedAt }) {
 const TOKENS = {
   dark: `
   color-scheme: dark;
-  --bg-0: #070b0f;
-  --bg-1: #0d141b;
+  --bg-0: #05080c;
+  --bg-1: #0a1218;
   --bg-2: #16222e;
+  --scene-a: #08131c;
+  --scene-b: #01030a;
   --fg: #e8eef5;
   --fg-dim: #8fa2b6;
   --line: rgba(148, 163, 184, 0.18);
-  --edge: rgba(148, 163, 184, 0.36);
+  --edge: rgba(148, 163, 184, 0.30);
   --mint: #6ee7b7;
-  --entity: #e8eef5;
-  --panel: rgba(13, 20, 27, 0.9);
+  --entity: #bcd8f2;
+  --panel: rgba(10, 18, 24, 0.9);
   --chip: rgba(148, 163, 184, 0.12);
-  --glow-a: rgba(45, 212, 191, 0.11);
-  --glow-b: rgba(56, 189, 248, 0.08);
-  --shadow: 0 18px 44px rgba(0, 0, 0, 0.55);
-  --k-decision: #6ee7b7;
-  --k-fact: #7dd3fc;
-  --k-open_question: #fbbf24;
-  --k-preference: #c4b5fd;
-  --k-note: #94a3b8;`,
+  --shadow: 0 18px 44px rgba(0, 0, 0, 0.6);
+  --k-decision: #a78bfa;
+  --k-fact: #2ee0d0;
+  --k-open_question: #e879f9;
+  --k-preference: #fb923c;
+  --k-note: #34d399;`,
   light: `
   color-scheme: light;
-  --bg-0: #eaeff5;
+  --bg-0: #e8eef5;
   --bg-1: #f7fafc;
   --bg-2: #ffffff;
+  --scene-a: #fbfdff;
+  --scene-b: #d7e1ec;
   --fg: #101820;
   --fg-dim: #4d6076;
   --line: rgba(16, 24, 32, 0.16);
-  --edge: rgba(16, 24, 32, 0.32);
+  --edge: rgba(16, 24, 32, 0.26);
   --mint: #0b8f6b;
-  --entity: #16222e;
+  --entity: #1b4a6b;
   --panel: rgba(255, 255, 255, 0.94);
   --chip: rgba(16, 24, 32, 0.055);
-  --glow-a: rgba(13, 148, 136, 0.10);
-  --glow-b: rgba(2, 132, 199, 0.07);
   --shadow: 0 18px 44px rgba(16, 24, 32, 0.2);
-  --k-decision: #0b8f6b;
-  --k-fact: #0b74b8;
-  --k-open_question: #a45a06;
-  --k-preference: #6d28d9;
-  --k-note: #55677a;`,
+  --k-decision: #6d28d9;
+  --k-fact: #0a7f78;
+  --k-open_question: #a21caf;
+  --k-preference: #b45309;
+  --k-note: #0f7a5a;`,
 }
 
 const CSS = `
@@ -663,63 +733,13 @@ button:hover { border-color: var(--mint); color: var(--mint); }
 main { position: relative; display: grid; grid-template-columns: 1fr; min-height: 0; }
 #stage {
   position: relative; min-height: 0; overflow: hidden;
-  background:
-    radial-gradient(900px 560px at 50% 44%, var(--glow-a) 0%, rgba(0, 0, 0, 0) 62%),
-    radial-gradient(700px 520px at 16% 92%, var(--glow-b) 0%, rgba(0, 0, 0, 0) 58%),
-    var(--bg-0);
-  box-shadow: inset 0 0 200px 40px rgba(0, 0, 0, 0.35);
+  background: var(--scene-b);
 }
-@media (prefers-color-scheme: light) {
-  #stage { box-shadow: inset 0 0 170px 30px rgba(148, 163, 184, 0.20); }
+#scene {
+  position: absolute; inset: 0; width: 100%; height: 100%; display: block;
+  touch-action: none; cursor: grab;
 }
-#canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
-#canvas.panning { cursor: grabbing; }
-
-.edge-glow { fill: none; stroke: var(--edge); stroke-width: 3.6; stroke-opacity: 0.32; stroke-linecap: round; }
-.edge { fill: none; stroke: var(--edge); stroke-width: 1.05; stroke-linecap: round; }
-.edge-group.supersede .edge { stroke: var(--mint); stroke-opacity: 0.55; stroke-dasharray: 4 4; }
-.edge-group.supersede .edge-glow { stroke: var(--mint); stroke-opacity: 0.16; }
-.edge-group.lit .edge { stroke: var(--mint); stroke-width: 1.7; stroke-dasharray: 6 6; animation: flow 1.4s linear infinite; }
-.edge-group.lit .edge-glow { stroke: var(--mint); stroke-opacity: 0.34; }
-.edge-group.dim { opacity: 0.09; }
-@keyframes flow { to { stroke-dashoffset: -24; } }
-
-.node { cursor: pointer; }
-.node .halo { opacity: 0.9; }
-.node.hub .halo { opacity: 1; }
-.node .core { fill: currentColor; stroke: var(--bg-0); stroke-width: 0.9; }
-.node.entity .core { stroke: var(--bg-1); stroke-width: 1.2; }
-.node .nucleus { fill: var(--bg-0); }
-.node.hub .ring { fill: none; stroke: currentColor; stroke-opacity: 0.55; stroke-width: 1.1; stroke-dasharray: 3 3.4; animation: spin 9s linear infinite; }
-@keyframes spin { to { stroke-dashoffset: -52; } }
-.node.superseded .core { stroke: var(--fg); stroke-opacity: 0.6; stroke-width: 1.1; stroke-dasharray: 2.6 2.2; }
-.node.retracted { opacity: 0.34; }
-.node.retracted .core { stroke-dasharray: 1.6 1.8; }
-.node.hit .core { stroke: var(--mint); stroke-width: 2; }
-.node.hit .halo { opacity: 0.3; }
-.node.sel .core { stroke: var(--mint); stroke-width: 2.4; }
-.node.sel .halo { opacity: 0.38; }
-.node:hover .core { stroke: var(--fg); stroke-width: 1.8; }
-.node.dim { opacity: 0.12; }
-.node.dim.retracted { opacity: 0.06; }
-.node.dim .halo { opacity: 0.16; }
-
-.k-decision { color: var(--k-decision); }
-.k-fact { color: var(--k-fact); }
-.k-open_question { color: var(--k-open_question); }
-.k-preference { color: var(--k-preference); }
-.k-note { color: var(--k-note); }
-.k-entity { color: var(--entity); }
-
-text.lbl {
-  font-family: inherit; font-size: 10.5px; font-weight: 500;
-  fill: var(--fg); fill-opacity: 0.82;
-  stroke: var(--bg-0); stroke-width: 3.2px; stroke-linejoin: round;
-  paint-order: stroke fill; pointer-events: none; user-select: none;
-}
-text.lbl.entity { font-size: 11.5px; font-weight: 650; fill-opacity: 0.96; }
-text.lbl.off { display: none; }
-text.lbl.dim { fill-opacity: 0.12; }
+#scene.dragging { cursor: grabbing; }
 
 #empty {
   position: absolute; inset: 0; display: flex; flex-direction: column;
@@ -822,11 +842,22 @@ footer {
 #hint { opacity: 0.85; text-align: right; }
 @media (max-width: 860px) {
   #hint { display: none; }
-  #panel { width: auto; left: 14px; }
+  #panel { width: auto; left: 14px; right: 14px; }
   input[type="search"] { width: 130px; }
 }
+/* The app embeds this page in a ~380x520 sidebar frame: keep the chrome from
+   eating the picture. */
+@media (max-width: 560px) {
+  header { gap: 8px; padding: 8px 10px 9px; }
+  .brand span.en { display: none; }
+  .counts { display: none; }
+  input[type="search"] { width: 108px; }
+  #zoom-in, #zoom-out { display: none; }
+  footer { padding: 6px 10px 7px; font-size: 10px; }
+  #legend { gap: 3px 10px; }
+}
 @media (prefers-reduced-motion: reduce) {
-  .edge.lit, .node.hub .ring { animation: none; }
+  #tooltip { transition: none; }
 }
 `
 
@@ -841,22 +872,15 @@ const BODY = `
       <select id="project" title="按项目过滤"></select>
       <div class="zoom">
         <button id="theme" title="主题：跟随系统 / 深色 / 浅色">◐</button>
-        <button id="zoom-in" title="放大">+</button>
-        <button id="zoom-out" title="缩小">−</button>
+        <button id="zoom-in" title="推近">+</button>
+        <button id="zoom-out" title="拉远">−</button>
         <button id="zoom-fit" title="复位 (f)">复位</button>
       </div>
     </div>
   </header>
   <main>
     <div id="stage">
-      <svg id="canvas" viewBox="0 0 1400 860" preserveAspectRatio="xMidYMid meet" role="img" aria-label="记忆图">
-        <defs id="defs"></defs>
-        <g id="viewport">
-          <g id="edges"></g>
-          <g id="nodes"></g>
-          <g id="labels"></g>
-        </g>
-      </svg>
+      <canvas id="scene" role="img" aria-label="记忆图"></canvas>
       <div id="tooltip"></div>
       <aside id="panel" hidden></aside>
       <div id="empty" hidden>
@@ -868,7 +892,7 @@ const BODY = `
   </main>
   <footer>
     <div id="legend"></div>
-    <div id="hint">滚轮缩放 · 拖拽平移 · 点击节点看详情 · Esc 清除 · / 搜索</div>
+    <div id="hint">拖动旋转 · 滚轮推拉 · 双击复位 · 点击神经元看详情 · Esc 清除 · / 搜索</div>
   </footer>
 </div>
 `
@@ -886,12 +910,17 @@ function clientScript(dataJson) {
   'use strict'
 
   var DATA = ${dataJson};
-  var canvas = document.getElementById('canvas');
-  var NS = canvas.namespaceURI;
-  var viewport = document.getElementById('viewport');
-  var edgeLayer = document.getElementById('edges');
-  var nodeLayer = document.getElementById('nodes');
-  var labelLayer = document.getElementById('labels');
+  var nodes = DATA.nodes;
+  var KINDS = ['decision', 'fact', 'open_question', 'preference', 'note'];
+  var CONFIDENCE_LABELS = {
+    user_stated: '用户明说 user_stated',
+    verified: '已验证 verified',
+    inferred: '推断 inferred'
+  };
+  var FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", "PingFang SC", sans-serif';
+
+  var scene = document.getElementById('scene');
+  var ctx = scene.getContext('2d');
   var stage = document.getElementById('stage');
   var tooltip = document.getElementById('tooltip');
   var panel = document.getElementById('panel');
@@ -901,37 +930,135 @@ function clientScript(dataJson) {
   var searchBox = document.getElementById('search');
   var projectBox = document.getElementById('project');
 
-  var nodes = DATA.nodes;
   var byKey = {};
   var neighbors = {};
   var selected = null;
-  var view = { k: 1, x: 0, y: 0 };
-  var GRADIENT_KINDS = ['decision', 'fact', 'open_question', 'preference', 'note', 'entity'];
-  var CONFIDENCE_LABELS = {
-    user_stated: '用户明说 user_stated',
-    verified: '已验证 verified',
-    inferred: '推断 inferred'
-  };
+  var hovered = null;
+  var W = 0;
+  var H = 0;
+  var DPR = 1;
+  var dirty = true;
 
   /* ------------------------------------------------------------ theme */
 
   var THEME_KEY = 'dsh-memory-graph-theme';
   var themeButton = document.getElementById('theme');
-  var gradients = {};
+  var PAL = null;
+  var sprites = {};
+  var glowCanvas = document.createElement('canvas');
+  var glowCtx = glowCanvas.getContext('2d');
+  var reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
   function storedTheme() {
     try { return localStorage.getItem(THEME_KEY) || 'auto'; } catch (error) { return 'auto' }
   }
 
-  function gradientStops() {
+  function isDark() {
+    var attr = document.documentElement.getAttribute('data-theme');
+    if (attr === 'dark') return true;
+    if (attr === 'light') return false;
+    return !(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+  }
+
+  function token(styles, name, fallback) {
+    var value = styles.getPropertyValue(name);
+    value = value ? String(value).trim() : '';
+    return value || fallback;
+  }
+
+  function parseColor(input) {
+    var text = String(input || '').trim();
+    if (text.charAt(0) === '#') {
+      var hex = text.slice(1);
+      if (hex.length === 3) hex = hex.charAt(0) + hex.charAt(0) + hex.charAt(1) + hex.charAt(1) + hex.charAt(2) + hex.charAt(2);
+      var value = parseInt(hex, 16);
+      if (value === value) return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+    }
+    var match = text.match(/([0-9.]+)[,\\s]+([0-9.]+)[,\\s]+([0-9.]+)/);
+    if (match) return [Number(match[1]), Number(match[2]), Number(match[3])];
+    return [148, 163, 184];
+  }
+
+  function rgba(rgb, alpha) {
+    return 'rgba(' + Math.round(rgb[0]) + ',' + Math.round(rgb[1]) + ',' + Math.round(rgb[2]) + ',' + alpha + ')';
+  }
+
+  // A radial-gradient sprite per kind, drawn once. 339 radial gradients per
+  // frame is what makes naive canvas glow crawl; blitting a sprite is cheap.
+  function haloSprite(rgb) {
+    var size = 128;
+    var canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    var paint = canvas.getContext('2d');
+    var gradient = paint.createRadialGradient(64, 64, 0, 64, 64, 64);
+    gradient.addColorStop(0, rgba(rgb, 0.8));
+    gradient.addColorStop(0.16, rgba(rgb, 0.34));
+    gradient.addColorStop(0.34, rgba(rgb, 0.11));
+    gradient.addColorStop(0.62, rgba(rgb, 0.032));
+    gradient.addColorStop(1, rgba(rgb, 0));
+    paint.fillStyle = gradient;
+    paint.fillRect(0, 0, size, size);
+    return canvas;
+  }
+
+  function readPalette() {
     var styles = getComputedStyle(document.documentElement);
-    GRADIENT_KINDS.forEach(function (kind) {
-      var color = styles.getPropertyValue('--k-' + kind).trim() || '#94a3b8';
-      var stops = gradients[kind];
-      stops[0].setAttribute('stop-color', color);
-      stops[1].setAttribute('stop-color', color);
-      stops[2].setAttribute('stop-color', color);
+    var palette = {
+      dark: isDark(),
+      kinds: {},
+      rgb: {},
+      entity: token(styles, '--entity', '#f2f7fd'),
+      edge: token(styles, '--edge', 'rgba(148,163,184,0.3)'),
+      mint: token(styles, '--mint', '#6ee7b7'),
+      fg: token(styles, '--fg', '#e8eef5'),
+      bg0: token(styles, '--bg-0', '#05080c'),
+      sceneA: token(styles, '--scene-a', '#0c1a22'),
+      sceneB: token(styles, '--scene-b', '#04070a')
+    };
+    KINDS.forEach(function (kind) { palette.kinds[kind] = token(styles, '--k-' + kind, '#94a3b8') });
+    palette.kinds.entity = palette.entity;
+    Object.keys(palette.kinds).forEach(function (kind) {
+      palette.rgb[kind] = parseColor(palette.kinds[kind]);
     });
+    // Entities borrow the hue of the region they live in, but washed towards the
+    // foreground colour: a hub should read as the paler, bigger cousin of a card.
+    palette.soft = {};
+    var pale = palette.dark ? [235, 245, 255] : [250, 252, 255];
+    KINDS.forEach(function (kind) {
+      var rgb = palette.rgb[kind];
+      palette.soft[kind] = [
+        rgb[0] + (pale[0] - rgb[0]) * 0.42,
+        rgb[1] + (pale[1] - rgb[1]) * 0.42,
+        rgb[2] + (pale[2] - rgb[2]) * 0.42,
+      ];
+    });
+    palette.soft.entity = parseColor(palette.entity);
+    palette.rgbMint = parseColor(palette.mint);
+    palette.rgbFg = parseColor(palette.fg);
+    return palette;
+  }
+
+  function rgbOf(node) {
+    return node.type === 'entity' ? PAL.soft[node.kind] || PAL.rgb[node.kind] : PAL.rgb[node.kind];
+  }
+
+  function spriteOf(node) {
+    return node.type === 'entity' ? sprites['soft:' + node.kind] || sprites[node.kind] : sprites[node.kind];
+  }
+
+  function rebuildSprites() {
+    PAL = readPalette();
+    sprites = {};
+    Object.keys(PAL.kinds).forEach(function (kind) {
+      sprites[kind] = haloSprite(PAL.rgb[kind]);
+    });
+    KINDS.forEach(function (kind) {
+      sprites['soft:' + kind] = haloSprite(PAL.soft[kind]);
+    });
+    var background = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    PAL.background = background;
+    dirty = true;
   }
 
   function applyTheme(mode) {
@@ -939,7 +1066,7 @@ function clientScript(dataJson) {
     else document.documentElement.setAttribute('data-theme', mode);
     themeButton.textContent = mode === 'dark' ? '☾' : mode === 'light' ? '☀' : '◐';
     themeButton.title = '主题：' + (mode === 'auto' ? '跟随系统' : mode === 'dark' ? '深色' : '浅色');
-    gradientStops();
+    rebuildSprites();
   }
 
   themeButton.addEventListener('click', function () {
@@ -948,17 +1075,14 @@ function clientScript(dataJson) {
     applyTheme(next);
   });
 
-  if (window.matchMedia) {
-    var media = window.matchMedia('(prefers-color-scheme: light)');
-    var onChange = function () { if (storedTheme() === 'auto') gradientStops(); };
-    if (media.addEventListener) media.addEventListener('change', onChange);
-    else if (media.addListener) media.addListener(onChange);
-  }
-
+  /* ------------------------------------------------------------ graph data */
 
   nodes.forEach(function (node) {
     byKey[node.key] = node;
     neighbors[node.key] = {};
+    node.vis = 1;
+    node.hit = false;
+    node.proj = { sx: 0, sy: 0, sr: 1, k: 1, z: 0 };
   });
   DATA.links.forEach(function (link) {
     if (!byKey[link.s] || !byKey[link.t]) return;
@@ -966,191 +1090,616 @@ function clientScript(dataJson) {
     neighbors[link.t][link.s] = true;
   });
 
-  function el(name, attrs) {
-    var node = document.createElementNS(NS, name);
-    if (attrs) { for (var key in attrs) node.setAttribute(key, attrs[key]); }
-    return node;
-  }
   function h(tag, cls, text) {
     var node = document.createElement(tag);
     if (cls) node.className = cls;
     if (text !== undefined && text !== null) node.textContent = text;
     return node;
   }
-  function fmt(n) { return Math.round(n * 10) / 10; }
 
-  // One soft radial glow per kind: the cell body reads as light, not as a dot.
-  var defs = document.getElementById('defs');
-  GRADIENT_KINDS.forEach(function (kind) {
-    var gradient = el('radialGradient', { id: 'glow-' + kind });
-    var stops = [];
-    [[0, 0.42], [0.4, 0.13], [1, 0]].forEach(function (spec) {
-      var stop = el('stop', { offset: String(spec[0]), 'stop-opacity': String(spec[1]) });
-      gradient.appendChild(stop);
-      stops.push(stop);
-    });
-    defs.appendChild(gradient);
-    gradients[kind] = stops;
-  });
-  // The address bar can pin a theme and open one node: #dark, #light, and
-  // #dark&<card id or entity slug>. Screenshots use it, and so does anything
-  // that wants to link straight to one cell.
-  var initialTheme = storedTheme();
-  var pendingNode = '';
-  var fragment = String(location.hash || '').replace(/^#/, '');
-  try {
-    fragment = decodeURIComponent(fragment);
-  } catch (error) {
-    // A stray percent sign is not worth a blank page.
-  }
-  fragment.split('&').forEach(function (part) {
-    if (part === 'dark' || part === 'light') initialTheme = part;
-    else if (part) pendingNode = part;
-  });
-  applyTheme(initialTheme);
-
-  /* ------------------------------------------------------------ header */
-
-  var c = DATA.counts;
-  countsBox.textContent = '';
-  [['卡片', c.cards], ['实体', c.entities], ['项目', c.projects]].forEach(function (pair, i) {
-    if (i > 0) countsBox.appendChild(document.createTextNode(' · '));
-    var b = h('b', null, String(pair[1]));
-    countsBox.appendChild(document.createTextNode(pair[0] + ' '));
-    countsBox.appendChild(b);
-  });
-  if (c.superseded) countsBox.appendChild(document.createTextNode(' · 已替换 ' + c.superseded));
-  if (c.retracted) countsBox.appendChild(document.createTextNode(' · 已撤回 ' + c.retracted));
-  if (DATA.generatedAt) {
-    countsBox.appendChild(document.createTextNode(' · 生成于 ' + String(DATA.generatedAt).replace('T', ' ').slice(0, 16)));
-  }
-
-  /* ------------------------------------------------------------ legend */
-
-  var LEGEND = [
-    ['decision', '决策'], ['fact', '事实'], ['open_question', '待解'],
-    ['preference', '偏好'], ['note', '记录']
-  ];
-  LEGEND.forEach(function (pair) {
-    var item = h('div', 'item');
-    item.appendChild(h('span', 'dot i-' + pair[0]));
-    item.appendChild(h('span', null, pair[1]));
-    legendBox.appendChild(item);
-  });
-  var ent = h('div', 'item');
-  ent.appendChild(h('span', 'dot i-entity'));
-  ent.appendChild(h('span', null, '实体（越大连得越多）'));
-  legendBox.appendChild(ent);
-  var hub = h('div', 'item');
-  hub.appendChild(h('span', 'dot hollow i-mint'));
-  hub.appendChild(h('span', null, '跨项目枢纽'));
-  legendBox.appendChild(hub);
-  var sup = h('div', 'item');
-  sup.appendChild(h('span', 'ringed i-mint'));
-  sup.appendChild(h('span', null, '虚线 = 已被替换'));
-  legendBox.appendChild(sup);
-
-  if (nodes.length === 0) {
-    emptyBox.hidden = false;
-    return;
-  }
-
-  /* ------------------------------------------------------------ edges */
-
-  function hashNumber(text) {
-    var sum = 0;
-    for (var i = 0; i < text.length; i++) sum = (sum * 31 + text.charCodeAt(i)) % 100003;
-    return sum;
-  }
-
-  var edgeEls = [];
-  DATA.links.forEach(function (link) {
-    var a = byKey[link.s];
-    var b = byKey[link.t];
-    if (!a || !b) return;
-    var dx = b.x - a.x;
-    var dy = b.y - a.y;
-    var len = Math.sqrt(dx * dx + dy * dy) || 1;
-    var ux = dx / len;
-    var uy = dy / len;
-    var bend = Math.min(42, len * 0.16) * (hashNumber(a.key + b.key) % 2 ? 1 : -1);
-    // Start and end just outside the node, so lines do not pierce the halo.
-    var ax = a.x + ux * (a.r + 1.5);
-    var ay = a.y + uy * (a.r + 1.5);
-    var bx = b.x - ux * (b.r + 1.5);
-    var by = b.y - uy * (b.r + 1.5);
-    var mx = (ax + bx) / 2 - uy * bend;
-    var my = (ay + by) / 2 + ux * bend;
-    var d = 'M' + fmt(ax) + ' ' + fmt(ay) + 'Q' + fmt(mx) + ' ' + fmt(my) + ' ' + fmt(bx) + ' ' + fmt(by);
-    var group = el('g', { 'class': 'edge-group' + (link.k === 'supersede' ? ' supersede' : '') });
-    // Two passes: a wide faint halo and the axon itself. Cheaper than a filter
-    // and it keeps the line glowing without touching the text layer.
-    group.appendChild(el('path', { 'class': 'edge-glow', d: d }));
-    group.appendChild(el('path', { 'class': 'edge', d: d }));
-    edgeLayer.appendChild(group);
-    edgeEls.push({ g: group, a: link.s, b: link.t });
-  });
-
-  /* ------------------------------------------------------------ nodes */
-
-  nodes.forEach(function (node) {
-    var cls = 'node ' + node.type + ' k-' + node.kind;
-    if (node.hub) cls += ' hub';
-    if (node.status === 'superseded') cls += ' superseded';
-    if (node.status === 'retracted') cls += ' retracted';
-    node.baseClass = cls;
-
-    var group = el('g', { 'class': cls, 'tabindex': '0', role: 'button' });
-    group.appendChild(el('circle', {
-      'class': 'halo',
-      cx: node.x,
-      cy: node.y,
-      r: fmt(node.r * node.haloScale),
-      fill: 'url(#glow-' + node.kind + ')'
-    }));
-    if (node.hub) {
-      group.appendChild(el('circle', { 'class': 'ring', cx: node.x, cy: node.y, r: fmt(node.r + 5) }));
+  // Deterministic pseudo-randomness for the dendrites and the edge bends: a
+  // pure function of the cell key, so the same vault draws the same hairs.
+  function hash32(text) {
+    var value = 2166136261;
+    for (var i = 0; i < text.length; i++) {
+      value ^= text.charCodeAt(i);
+      value = Math.imul(value, 16777619);
     }
-    group.appendChild(el('circle', { 'class': 'core', cx: node.x, cy: node.y, r: node.r }));
-    if (node.type === 'entity' && node.r >= 10) {
-      group.appendChild(el('circle', { 'class': 'nucleus', cx: node.x, cy: node.y, r: fmt(node.r * 0.42) }));
+    return value >>> 0;
+  }
+
+  function hairsFor(node) {
+    if (node.hairs) return node.hairs;
+    var seed = hash32(node.key);
+    var count = 3 + (seed % 5);
+    var out = [];
+    for (var i = 0; i < count; i++) {
+      var a = (seed >>> ((i % 8) * 4)) & 1023;
+      var b = (seed >>> ((i * 3 + 5) % 24)) & 511;
+      var c = (seed >>> ((i * 5 + 3) % 24)) & 511;
+      out.push([
+        i * 2.39996 + (a / 1023) * 0.9,
+        ((b / 511) - 0.5) * 1.7,
+        3.4 + (c / 511) * 2.8,
+        ((a / 1023) - 0.5) * 1.6
+      ]);
+    }
+    node.hairs = out;
+    return out;
+  }
+
+  /* ------------------------------------------------------------ camera */
+
+  var CAM_START = { yaw: 0.62, pitch: -0.26, dolly: 1 };
+  var cam = { yaw: CAM_START.yaw, pitch: CAM_START.pitch, dolly: CAM_START.dolly };
+  var DIST = 3.1;
+  var frame = { cy: 1, sy: 0, cp: 1, sp: 0, R: 300, cx: 0, cy: 0 };
+  var focus = null;
+  var still = false;
+
+  function clamp(value, lo, hi) {
+    return value < lo ? lo : value > hi ? hi : value;
+  }
+
+  function syncFrame() {
+    frame.cy = Math.cos(cam.yaw);
+    frame.sy = Math.sin(cam.yaw);
+    frame.cp = Math.cos(cam.pitch);
+    frame.sp = Math.sin(cam.pitch);
+    // Fit the cloud to the frame: radius90 is the rotation-invariant radius that
+    // holds nine cells in ten, so this keeps the same margins at any angle and in
+    // the narrow sidebar iframe.
+    var reach = DATA.radius90 || 1;
+    frame.R = (Math.min(W, H * 1.45) * 0.44) / (reach * 1.12) * cam.dolly;
+    frame.cx = W / 2;
+    frame.cyy = H / 2;
+  }
+
+  function projectPoint(x, y, z, out) {
+    var x1 = x * frame.cy - z * frame.sy;
+    var z1 = x * frame.sy + z * frame.cy;
+    var y1 = y * frame.cp - z1 * frame.sp;
+    var z2 = y * frame.sp + z1 * frame.cp;
+    var k = DIST / (DIST - z2);
+    out.sx = frame.cx + x1 * frame.R * k;
+    out.sy = frame.cyy + y1 * frame.R * k * 0.94;
+    out.k = k;
+    out.z = z2;
+    return out;
+  }
+
+  var scratch = { sx: 0, sy: 0, k: 1, z: 0 };
+
+  function projectInto(node) {
+    var x1 = node.x * frame.cy - node.z * frame.sy;
+    var z1 = node.x * frame.sy + node.z * frame.cy;
+    var y1 = node.y * frame.cp - z1 * frame.sp;
+    var z2 = node.y * frame.sp + z1 * frame.cp;
+    var k = DIST / (DIST - z2);
+    var p = node.proj;
+    p.x1 = x1;
+    p.y1 = y1;
+    p.z = z2;
+    p.k = k;
+    p.sx = frame.cx + x1 * frame.R * k;
+    p.sy = frame.cyy + y1 * frame.R * k * 0.94;
+    p.sr = node.r * frame.R * k;
+    // Depth cue: front cells are big and bright, back cells small, dim and
+    // defocused. k spans about 0.74 (far) .. 1.54 (near).
+    p.depth = clamp((k - 0.74) / 0.8, 0, 1);
+    return p;
+  }
+
+  function resetCamera() {
+    cam.yaw = CAM_START.yaw;
+    cam.pitch = CAM_START.pitch;
+    cam.dolly = CAM_START.dolly;
+    focus = null;
+    dirty = true;
+  }
+
+  // Turn the cloud so the given cell faces the viewer. Used by deep links and
+  // by clicks: a selected neuron should never be on the far side.
+  function focusOn(node, instant) {
+    var radius = Math.sqrt(node.x * node.x + node.y * node.y + node.z * node.z) || 0.001;
+    var targetYaw = Math.atan2(node.x, node.z);
+    var front = Math.sqrt(Math.max(0.0001, node.x * node.x + node.z * node.z));
+    var targetPitch = clamp(Math.atan2(node.y, front), -1.15, 1.15);
+    if (instant || reduced) {
+      cam.yaw = targetYaw;
+      cam.pitch = targetPitch;
+      focus = null;
+      dirty = true;
+      return;
+    }
+    focus = { yaw: targetYaw, pitch: targetPitch, t: 0 };
+  }
+
+  /* ------------------------------------------------------------ drawing */
+
+  var order = [];
+  var hairQueue = [];
+  var placed = [];
+  var lastInteraction = 0;
+
+  function background() {
+    var styles = PAL;
+    var gradient = ctx.createRadialGradient(W * 0.5, H * 0.42, 0, W * 0.5, H * 0.5, Math.max(W, H) * 0.78);
+    gradient.addColorStop(0, styles.sceneA);
+    gradient.addColorStop(1, styles.sceneB);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function visibleAlpha(node) {
+    var alpha = node.proj.depth;
+    var eased = 0.1 + 0.9 * alpha * alpha * (3 - 2 * alpha);
+    if (node.vis === 0) eased *= 0.24;
+    if (node.status === 'retracted') eased *= 0.42;
+    return eased;
+  }
+
+  function drawEdges() {
+    var links = DATA.links;
+    var i;
+    var link;
+    var a;
+    var b;
+    var lit = 0;
+    var normal = 0;
+    ctx.lineCap = 'round';
+    ctx.globalCompositeOperation = 'source-over';
+
+    for (var pass = 0; pass < 3; pass++) {
+      var any = false;
+      ctx.beginPath();
+      for (i = 0; i < links.length; i++) {
+        link = links[i];
+        a = byKey[link.s];
+        b = byKey[link.t];
+        if (!a || !b) continue;
+        var state = a.vis === 2 && b.vis === 2 ? 2 : a.vis === 0 || b.vis === 0 ? 0 : 1;
+        if (state !== pass) continue;
+        var dx = b.proj.sx - a.proj.sx;
+        var dy = b.proj.sy - a.proj.sy;
+        var len = Math.sqrt(dx * dx + dy * dy);
+        if (len < 1 || len > Math.max(W, H) * 1.6) continue;
+        var bend = ((hash32(a.key + b.key) % 200) / 100 - 1) * Math.min(34, len * 0.14);
+        var ux = dx / (len || 1);
+        var uy = dy / (len || 1);
+        var ax = a.proj.sx + ux * a.proj.sr * 0.9;
+        var ay = a.proj.sy + uy * a.proj.sr * 0.9;
+        var bx = b.proj.sx - ux * b.proj.sr * 0.9;
+        var by = b.proj.sy - uy * b.proj.sr * 0.9;
+        var mx = (ax + bx) / 2 - uy * bend;
+        var my = (ay + by) / 2 + ux * bend;
+        ctx.moveTo(ax, ay);
+        ctx.quadraticCurveTo(mx, my, bx, by);
+        any = true;
+        if (pass === 2) lit += 1;
+        else normal += 1;
+      }
+      if (!any) continue;
+      if (pass === 0) {
+        ctx.strokeStyle = PAL.edge;
+        ctx.globalAlpha = 0.09;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      } else if (pass === 1) {
+        ctx.strokeStyle = PAL.edge;
+        ctx.globalAlpha = 0.2;
+        ctx.lineWidth = 0.85;
+        ctx.stroke();
+      } else {
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.strokeStyle = PAL.mint;
+        ctx.globalAlpha = 0.1;
+        ctx.lineWidth = 4.4;
+        ctx.stroke();
+        ctx.globalAlpha = 0.42;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.globalCompositeOperation = 'source-over';
+      }
     }
 
-    var title = el('title');
-    title.textContent = node.full || node.label;
-    group.appendChild(title);
+    // Axons: the few longest connections, drawn as pale hairlines straight across
+    // the cloud. Real graphs have a handful of long-range links, and they are what
+    // make the picture read as one connected nervous system instead of five islands.
+    var far = [];
+    for (i = 0; i < links.length; i++) {
+      link = links[i];
+      a = byKey[link.s];
+      b = byKey[link.t];
+      if (!a || !b || (a.vis === 0 && b.vis === 0)) continue;
+      var fdx = b.proj.sx - a.proj.sx;
+      var fdy = b.proj.sy - a.proj.sy;
+      var flen = Math.sqrt(fdx * fdx + fdy * fdy);
+      if (flen < Math.min(W, H) * 0.16) continue;
+      far.push({ a: a, b: b, len: flen, bend: hash32(a.key + b.key) % 2 ? 1 : -1 });
+    }
+    if (far.length > 0) {
+      far.sort(function (p, q) { return q.len - p.len });
+      if (far.length > 26) far.length = 26;
+      ctx.globalCompositeOperation = PAL.dark ? 'lighter' : 'source-over';
+      ctx.beginPath();
+      for (i = 0; i < far.length; i++) {
+        var f = far[i];
+        var fux = (f.b.proj.sx - f.a.proj.sx) / f.len;
+        var fuy = (f.b.proj.sy - f.a.proj.sy) / f.len;
+        var fcx = (f.a.proj.sx + f.b.proj.sx) / 2 - fuy * f.len * 0.16 * f.bend;
+        var fcy = (f.a.proj.sy + f.b.proj.sy) / 2 + fux * f.len * 0.16 * f.bend;
+        ctx.moveTo(f.a.proj.sx, f.a.proj.sy);
+        ctx.quadraticCurveTo(fcx, fcy, f.b.proj.sx, f.b.proj.sy);
+      }
+      ctx.strokeStyle = PAL.fg;
+      ctx.globalAlpha = PAL.dark ? 0.16 : 0.2;
+      ctx.lineWidth = 0.9;
+      ctx.stroke();
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    ctx.globalAlpha = 1;
+  }
 
-    group.addEventListener('pointerenter', function (event) { hover(node, event); });
-    group.addEventListener('pointerleave', function () { unhover(); });
-    group.addEventListener('focus', function () { hover(node, null); });
-    group.addEventListener('blur', function () { unhover(); });
-    group.addEventListener('click', function (event) {
-      event.stopPropagation();
-      select(selected === node.key ? null : node.key);
+  function drawGlow() {
+    var gw = glowCanvas.width;
+    var gh = glowCanvas.height;
+    if (gw === 0 || gh === 0) return;
+    glowCtx.setTransform(1, 0, 0, 1, 0, 0);
+    glowCtx.globalCompositeOperation = 'source-over';
+    glowCtx.clearRect(0, 0, gw, gh);
+    glowCtx.globalCompositeOperation = PAL.dark ? 'lighter' : 'source-over';
+    var scale = gw / Math.max(1, W);
+    glowCtx.setTransform(scale, 0, 0, scale, 0, 0);
+
+    for (var i = 0; i < order.length; i++) {
+      var node = order[i];
+      var p = node.proj;
+      var alpha = visibleAlpha(node);
+      if (alpha < 0.02) continue;
+      var lit = node.key === selected || node === hovered;
+      var radius = p.sr * node.haloScale * (1 + (1 - p.depth) * 0.55) * (lit ? 1.9 : 1);
+      if (radius < 1.2) continue;
+      if (p.sx < -radius || p.sx > W + radius || p.sy < -radius || p.sy > H + radius) continue;
+      glowCtx.globalAlpha = Math.min(1, alpha * (PAL.dark ? 0.5 : 0.26) * (lit ? 1.6 : 1));
+      glowCtx.drawImage(spriteOf(node), p.sx - radius, p.sy - radius, radius * 2, radius * 2);
+    }
+
+    ctx.globalCompositeOperation = PAL.dark ? 'lighter' : 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.drawImage(glowCanvas, 0, 0, W, H);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  function drawCells() {
+    for (var i = 0; i < order.length; i++) {
+      var node = order[i];
+      var p = node.proj;
+      var alpha = visibleAlpha(node);
+      var sr = p.sr;
+      if (sr < 0.7) continue;
+      if (p.sx < -sr - 2 || p.sx > W + sr + 2 || p.sy < -sr - 2 || p.sy > H + sr + 2) continue;
+      var rgb = rgbOf(node);
+      if (sr < 1.6) {
+        // Too small for a body: one dot, still colour-coded.
+        ctx.globalAlpha = alpha * 0.9;
+        ctx.fillStyle = rgba(rgb, 1);
+        ctx.fillRect(p.sx - 0.5, p.sy - 0.5, 1.4, 1.4);
+        continue;
+      }
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      ctx.arc(p.sx, p.sy, sr, 0, 6.2832);
+      ctx.fillStyle = rgba(rgb, 1);
+      ctx.fill();
+
+      if (node.status === 'superseded') {
+        ctx.globalAlpha = alpha * 0.75;
+        ctx.setLineDash([2.4, 2.4]);
+        ctx.strokeStyle = rgba(PAL.rgbFg, 0.85);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(p.sx, p.sy, sr + 1.4, 0, 6.2832);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // The core: on black it is whitened so the soma reads as light, on paper it
+      // is deepened so the same chip reads as ink instead of a donut.
+      if (sr > 2.0) {
+        ctx.globalAlpha = alpha * 0.92;
+        ctx.beginPath();
+        ctx.arc(p.sx, p.sy, Math.max(0.8, sr * 0.45), 0, 6.2832);
+        var core = PAL.dark ? [255, 255, 255] : [12, 20, 28];
+        var mix = PAL.dark ? 0.72 : 0.34;
+        ctx.fillStyle = rgba(
+          [
+            rgb[0] + (core[0] - rgb[0]) * mix,
+            rgb[1] + (core[1] - rgb[1]) * mix,
+            rgb[2] + (core[2] - rgb[2]) * mix,
+          ],
+          1,
+        );
+        ctx.fill();
+      }
+
+      if (node.key === selected) {
+        ctx.globalAlpha = 0.85;
+        ctx.strokeStyle = PAL.mint;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(p.sx, p.sy, sr * 1.9 + 3.5, 0, 6.2832);
+        ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawHairs() {
+    hairQueue.length = 0;
+    for (var i = 0; i < order.length; i++) {
+      var node = order[i];
+      if (node.proj.sr < 2.4 && node.key !== selected && node !== hovered) continue;
+      if (node.vis === 0) continue;
+      hairQueue.push(node);
+    }
+    // Only the nearest and the biggest cells get dendrites: this is the LOD
+    // that keeps a 339-cell cloud at 60fps.
+    if (hairQueue.length > 96) {
+      hairQueue.sort(function (a, b) { return b.proj.sr - a.proj.sr });
+      hairQueue.length = 96;
+    }
+
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.lineCap = 'round';
+    for (var k = 0; k < hairQueue.length; k++) {
+      var cell = hairQueue[k];
+      var p = cell.proj;
+      var alpha = visibleAlpha(cell);
+      if (alpha < 0.05) continue;
+      var hairs = hairsFor(cell);
+      var rgb = rgbOf(cell);
+      var emphasis = cell.key === selected || cell === hovered ? 1.7 : 1;
+      ctx.strokeStyle = rgba(rgb, 0.34 * alpha * (PAL.dark ? 1 : 0.85));
+      ctx.lineWidth = clamp(p.sr * 0.07, 0.4, 1.1) * emphasis;
+      ctx.beginPath();
+      for (var j = 0; j < hairs.length; j++) {
+        var hair = hairs[j];
+        var ce = Math.cos(hair[1]);
+        var dirx = ce * Math.cos(hair[0]);
+        var diry = Math.sin(hair[1]);
+        var dirz = ce * Math.sin(hair[0]);
+        var reach = cell.r * hair[2];
+        projectPoint(cell.x + dirx * reach, cell.y + diry * reach, cell.z + dirz * reach, scratch);
+        var ex = scratch.sx;
+        var ey = scratch.sy;
+        var dx = ex - p.sx;
+        var dy = ey - p.sy;
+        var len = Math.sqrt(dx * dx + dy * dy) || 1;
+        // Bend the hair sideways in screen space: a straight spoke looks like a
+        // diagram, a bowed one looks like an axon.
+        var cx = p.sx + dx * 0.55 - (dy / len) * len * 0.22 * hair[3];
+        var cy = p.sy + dy * 0.55 + (dx / len) * len * 0.22 * hair[3];
+        var sx0 = p.sx + (dx / len) * p.sr * 1.05;
+        var sy0 = p.sy + (dy / len) * p.sr * 1.05;
+        ctx.moveTo(sx0, sy0);
+        ctx.quadraticCurveTo(cx, cy, ex, ey);
+      }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function labelBox(text, size, weight) {
+    ctx.font = weight + ' ' + size + 'px ' + FONT;
+    var width = ctx.measureText(text).width;
+    return { w: width, h: size * 1.16 };
+  }
+
+  function drawText(text, x, y, color, alpha, size, weight, halo) {
+    ctx.font = weight + ' ' + size + 'px ' + FONT;
+    ctx.globalAlpha = alpha;
+    if (halo) {
+      ctx.lineWidth = Math.max(2.4, size * 0.26);
+      ctx.strokeStyle = halo;
+      ctx.lineJoin = 'round';
+      ctx.strokeText(text, x, y);
+    }
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+  }
+
+  function collides(box) {
+    for (var i = 0; i < placed.length; i++) {
+      var other = placed[i];
+      if (box.x1 <= other.x0 || other.x1 <= box.x0 || box.y1 <= other.y0 || other.y1 <= box.y0) continue;
+      return true;
+    }
+    return false;
+  }
+
+  function tryLabel(node, priority) {
+    var p = node.proj;
+    var size = node.type === 'entity' ? 11.5 : 10.5;
+    var weight = node.type === 'entity' ? 600 : 500;
+    var box = labelBox(node.label, size, weight);
+    var gap = p.sr + 6;
+    var candidates = [
+      [p.sx + gap, p.sy, 'start'],
+      [p.sx - gap, p.sy, 'end'],
+      [p.sx, p.sy + gap + size * 0.7, 'middle'],
+      [p.sx, p.sy - gap - size * 0.2, 'middle'],
+      [p.sx + gap * 0.75, p.sy - gap * 0.75, 'start'],
+      [p.sx - gap * 0.75, p.sy - gap * 0.75, 'end']
+    ];
+    for (var i = 0; i < candidates.length; i++) {
+      var x = candidates[i][0];
+      var y = candidates[i][1];
+      var anchor = candidates[i][2];
+      var left = anchor === 'start' ? x : anchor === 'end' ? x - box.w : x - box.w / 2;
+      var rect = {
+        x0: left - 2,
+        x1: left + box.w + 2,
+        y0: y - box.h * 0.82,
+        y1: y + box.h * 0.22
+      };
+      if (rect.x0 < 6 || rect.x1 > W - 6 || rect.y0 < 6 || rect.y1 > H - 6) continue;
+      if (collides(rect)) continue;
+      placed.push(rect);
+      var alpha = 0.62 + 0.34 * p.depth;
+      var color = node.type === 'entity' ? PAL.fg : PAL.kinds[node.kind];
+      drawText(node.label, x, y, color, Math.min(1, alpha + (priority === 0 ? 0.3 : 0)), size, weight, PAL.bg0);
+      return true;
+    }
+    return false;
+  }
+
+  function drawLabels() {
+    placed.length = 0;
+    ctx.textBaseline = 'alphabetic';
+    ctx.globalCompositeOperation = 'source-over';
+
+    // Reserve the cells themselves first: a label on top of a glowing soma is
+    // unreadable, and in a 339-cell cloud that was most of them.
+    for (var c = 0; c < order.length; c++) {
+      var cell0 = order[c];
+      if (cell0.vis === 0) continue;
+      var box0 = cell0.proj.sr + (cell0.type === 'entity' ? 5 : 3);
+      placed.push({
+        x0: cell0.proj.sx - box0,
+        x1: cell0.proj.sx + box0,
+        y0: cell0.proj.sy - box0,
+        y1: cell0.proj.sy + box0,
+      });
+    }
+
+    // Faint slice names first: they are furniture, not data. Each name sits just
+    // outside the outermost cell of its own slice, so it names the region instead
+    // of landing in the middle of it.
+    var sums = {};
+    for (var i = 0; i < order.length; i++) {
+      var node = order[i];
+      if (node.vis === 0) continue;
+      var entry = sums[node.cluster] || (sums[node.cluster] = { x: 0, y: 0, n: 0, far: null, farD: -1 });
+      entry.x += node.proj.sx;
+      entry.y += node.proj.sy;
+      entry.n += 1;
+    }
+    // Second pass: how far each slice spills from its own centre, and where its
+    // most outlying cell is. Needs the centroid, hence two passes.
+    Object.keys(sums).forEach(function (cluster) {
+      var bucket = sums[cluster];
+      bucket.x /= bucket.n;
+      bucket.y /= bucket.n;
     });
-    group.addEventListener('keydown', function (event) {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        select(selected === node.key ? null : node.key);
+    for (i = 0; i < order.length; i++) {
+      var cell = order[i];
+      if (cell.vis === 0) continue;
+      var bucket = sums[cell.cluster];
+      if (!bucket) continue;
+      var spread = Math.hypot(cell.proj.sx - bucket.x, cell.proj.sy - bucket.y);
+      if (spread > bucket.farD) {
+        bucket.farD = spread;
+        bucket.far = cell.proj;
+      }
+    }
+    var size = W < 560 ? 10 : 11.5;
+    Object.keys(sums).forEach(function (cluster) {
+      var bucket = sums[cluster];
+      if (bucket.n < 3 || !bucket.far) return;
+      // Outward from the slice's own centre, so the name hugs its region.
+      var dx = bucket.far.sx - bucket.x;
+      var dy = bucket.far.sy - bucket.y;
+      var len = Math.hypot(dx, dy) || 1;
+      var text = DATA.short[cluster] || cluster;
+      ctx.font = '600 ' + size + 'px ' + FONT;
+      var width = ctx.measureText(text).width;
+      var steps = [18, 34, 52, 74, 100];
+      for (var s = 0; s < steps.length; s++) {
+        var reach = bucket.far.sr + bucket.farD + steps[s];
+        var lx = clamp(bucket.x + (dx / len) * reach, 18 + width / 2, W - 18 - width / 2);
+        var ly = clamp(bucket.y + (dy / len) * reach, 22, H - 14);
+        var rect = { x0: lx - width / 2 - 4, x1: lx + width / 2 + 4, y0: ly - size, y1: ly + size * 0.4 };
+        if (rect.x0 < 4 || rect.x1 > W - 4) continue;
+        if (collides(rect)) continue;
+        placed.push(rect);
+        drawText(text, lx, ly, PAL.kinds[cluster] || PAL.fg, 0.4, size, 600, null);
+        break;
       }
     });
 
-    nodeLayer.appendChild(group);
-
-    var label = el('text', {
-      x: node.labelAt.x,
-      y: node.labelAt.y,
-      'text-anchor': node.labelAt.anchor,
-      'dominant-baseline': 'central',
-      'class': 'lbl ' + node.type + (node.labelAt.on ? '' : ' off')
+    // Then the labels that carry information, best first.
+    var wanted = [];
+    if (selected && byKey[selected]) {
+      wanted.push({ node: byKey[selected], priority: 0 });
+      Object.keys(neighbors[selected]).forEach(function (key) {
+        if (byKey[key]) wanted.push({ node: byKey[key], priority: 1 });
+      });
+    }
+    if (hovered) wanted.push({ node: hovered, priority: 0 });
+    for (i = 0; i < nodes.length; i++) {
+      if (nodes[i].hit) wanted.push({ node: nodes[i], priority: 1 });
+    }
+    if (!selected) {
+      for (i = 0; i < nodes.length; i++) {
+        var candidate = nodes[i];
+        if (candidate.type === 'entity' && candidate.degree >= 2 && candidate.vis !== 0) {
+          wanted.push({ node: candidate, priority: 2 });
+        }
+      }
+    }
+    wanted.sort(function (a, b) {
+      if (a.priority !== b.priority) return a.priority - b.priority;
+      return b.node.degree - a.node.degree;
     });
-    label.textContent = node.label;
-    labelLayer.appendChild(label);
+    var budget = W < 560 ? 6 : 14;
+    for (i = 0; i < wanted.length && budget > 0; i++) {
+      var item = wanted[i].node;
+      if (item.vis === 0) continue;
+      if (item.proj.sx < 4 || item.proj.sx > W - 4 || item.proj.sy < 4 || item.proj.sy > H - 4) continue;
+      if (tryLabel(item, wanted[i].priority)) budget -= 1;
+    }
+    ctx.globalAlpha = 1;
+  }
 
-    node.el = group;
-    node.lblEl = label;
-    node.lblOn = node.labelAt.on;
-  });
+  function render() {
+    if (!PAL || W === 0 || H === 0) return;
+    syncFrame();
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    background();
+
+    order.length = 0;
+    for (var i = 0; i < nodes.length; i++) {
+      projectInto(nodes[i]);
+      order.push(nodes[i]);
+    }
+    order.sort(function (a, b) { return a.proj.z - b.proj.z });
+
+    drawEdges();
+    drawGlow();
+    drawCells();
+    drawHairs();
+    drawLabels();
+  }
+
+  /* ------------------------------------------------------------ layout */
+
+  function resize() {
+    var rect = stage.getBoundingClientRect();
+    W = Math.max(1, Math.round(rect.width));
+    H = Math.max(1, Math.round(rect.height));
+    DPR = Math.min(1.75, window.devicePixelRatio || 1);
+    scene.width = Math.round(W * DPR);
+    scene.height = Math.round(H * DPR);
+    scene.style.width = W + 'px';
+    scene.style.height = H + 'px';
+    glowCanvas.width = Math.max(1, Math.round(W * 0.5));
+    glowCanvas.height = Math.max(1, Math.round(H * 0.5));
+    dirty = true;
+    render();
+  }
 
   /* ------------------------------------------------------------ tooltip */
 
@@ -1170,7 +1719,7 @@ function clientScript(dataJson) {
     tooltip.appendChild(h('div', 'tt-title', node.full || node.label));
 
     if (node.type === 'entity') {
-      var cards = Object.keys(neighbors[node.key]).filter(function (key) { return key.indexOf('c:') === 0; });
+      var cards = Object.keys(neighbors[node.key]).filter(function (key) { return key.indexOf('c:') === 0 });
       tooltip.appendChild(h('div', 'tt-snip', cards.length + ' 张卡片 · ' + (node.projects.length ? node.projects.join(' / ') : '未归档')));
       tooltip.appendChild(h('div', 'tt-meta', '首次 ' + (node.firstSeen || '—') + ' · 最近 ' + (node.lastSeen || '—')));
     } else {
@@ -1189,9 +1738,8 @@ function clientScript(dataJson) {
       x = event.clientX - rect.left + 16;
       y = event.clientY - rect.top + 14;
     } else {
-      var box = node.el.getBoundingClientRect();
-      x = box.left - rect.left + box.width / 2 + 14;
-      y = box.top - rect.top - 8;
+      x = node.proj.sx + 16;
+      y = node.proj.sy - 10;
     }
     var w = tooltip.offsetWidth;
     var hh = tooltip.offsetHeight;
@@ -1201,16 +1749,17 @@ function clientScript(dataJson) {
     tooltip.style.top = y + 'px';
   }
 
-  var hovered = null;
   function hover(node, event) {
     hovered = node;
     setTooltip(node, event);
-    if (!node.lblOn) node.lblEl.classList.remove('off');
+    dirty = true;
   }
+
   function unhover() {
+    if (!hovered) return;
     hovered = null;
     tooltip.classList.remove('on');
-    refresh();
+    dirty = true;
   }
 
   /* ------------------------------------------------------------ panel */
@@ -1229,7 +1778,7 @@ function clientScript(dataJson) {
     panel.textContent = '';
     var close = h('button', 'close', '×');
     close.title = '关闭 (Esc)';
-    close.addEventListener('click', function () { select(null); });
+    close.addEventListener('click', function () { select(null) });
     panel.appendChild(close);
 
     if (node.type === 'entity') {
@@ -1241,14 +1790,13 @@ function clientScript(dataJson) {
       panel.appendChild(row);
 
       var dl = h('dl');
-      var pairs = [
+      [
         ['首次出现', node.firstSeen || '—'],
         ['最近出现', node.lastSeen || '—'],
         ['别名', (node.aliases || []).join(' · ') || '—'],
         ['项目', (node.projects || []).join(' · ') || '—'],
         ['id', node.slug]
-      ];
-      pairs.forEach(function (pair) {
+      ].forEach(function (pair) {
         dl.appendChild(h('dt', null, pair[0]));
         dl.appendChild(h('dd', null, pair[1]));
       });
@@ -1262,7 +1810,7 @@ function clientScript(dataJson) {
           li.appendChild(h('span', 'd', mention.d));
           li.appendChild(h('span', null, mention.note));
           var key = 'c:' + mention.cardId;
-          if (byKey[key]) li.addEventListener('click', function () { select(key); });
+          if (byKey[key]) li.addEventListener('click', function () { select(key) });
           list.appendChild(li);
         });
         panel.appendChild(list);
@@ -1295,12 +1843,12 @@ function clientScript(dataJson) {
       var chips = h('div', 'chips');
       node.entities.forEach(function (entity) {
         var key = 'e:' + entity.slug;
-        chips.appendChild(chip(entity.name, byKey[key] ? function () { select(key); } : null));
+        chips.appendChild(chip(entity.name, byKey[key] ? function () { select(key) } : null));
       });
       panel.appendChild(chips);
     }
 
-    var chain = []
+    var chain = [];
     if (node.supersedes && node.supersedes.length) chain.push(['替换了', node.supersedes]);
     if (node.supersededBy) chain.push(['被替换为', [node.supersededBy]]);
     if (chain.length) {
@@ -1310,7 +1858,7 @@ function clientScript(dataJson) {
         entry[1].forEach(function (id) {
           var other = byKey['c:' + id];
           var label = entry[0] + ' ' + (other ? (other.full || other.label) : id);
-          chainBox.appendChild(chip(label, other ? function () { select(other.key); } : null));
+          chainBox.appendChild(chip(label, other ? function () { select(other.key) } : null));
         });
       });
       panel.appendChild(chainBox);
@@ -1329,8 +1877,8 @@ function clientScript(dataJson) {
       for (var i = 0; i < node.entities.length; i++) {
         if (String(node.entities[i].name).toLowerCase().indexOf(q) !== -1) return true;
       }
-    } else {
-      if (String(node.slug).toLowerCase().indexOf(q) !== -1) return true;
+    } else if (String(node.slug).toLowerCase().indexOf(q) !== -1) {
+      return true;
     }
     return false;
   }
@@ -1339,48 +1887,26 @@ function clientScript(dataJson) {
     var q = searchBox.value.trim().toLowerCase();
     var project = projectBox.value;
     var filtering = q !== '' || project !== '*';
-    var visible = {};
     var hitCount = 0;
 
     nodes.forEach(function (node) {
-      var cls = node.baseClass;
-      var show = true;
-      var hit = false;
+      node.vis = 1;
+      node.hit = false;
       if (selected) {
-        if (node.key === selected || neighbors[selected][node.key]) {
-          cls += ' lit';
-          show = true;
-        } else {
-          cls += ' dim';
-          show = false;
-        }
+        if (node.key === selected || neighbors[selected][node.key]) node.vis = 2;
+        else node.vis = 0;
       } else if (filtering) {
         var okProject = project === '*' || node.projects.indexOf(project) !== -1;
         var okQuery = matches(node, q);
         if (okProject && okQuery) {
-          if (q !== '') { cls += ' hit'; hit = true; hitCount++; }
+          if (q !== '') {
+            node.hit = true;
+            hitCount += 1;
+          }
         } else {
-          cls += ' dim';
-          show = false;
+          node.vis = 0;
         }
       }
-      if (node.key === selected) cls += ' sel';
-      node.el.setAttribute('class', cls);
-      visible[node.key] = show;
-
-      var labelCls = 'lbl ' + node.type + (show && (node.lblOn || hit || node.key === selected) ? '' : ' off') + (show ? '' : ' dim');
-      node.lblEl.setAttribute('class', labelCls);
-    });
-
-    edgeEls.forEach(function (edge) {
-      var cls = 'edge-group' + (String(edge.g.getAttribute('class')).indexOf('supersede') !== -1 ? ' supersede' : '');
-      if (selected) {
-        if (visible[edge.a] && visible[edge.b]) cls += ' lit';
-        else cls += ' dim';
-      } else if (!visible[edge.a] || !visible[edge.b]) {
-        cls += ' dim';
-      }
-      edge.g.setAttribute('class', cls);
     });
 
     var label = document.getElementById('match-bar');
@@ -1395,9 +1921,10 @@ function clientScript(dataJson) {
     } else if (label) {
       label.hidden = true;
     }
+    dirty = true;
   }
 
-  function select(key) {
+  function select(key, instant) {
     selected = key;
     if (!key) {
       panel.hidden = true;
@@ -1407,88 +1934,173 @@ function clientScript(dataJson) {
     var node = byKey[key];
     if (!node) return;
     renderPanel(node);
-    // Bring the node into view if it sits outside the viewport.
-    var box = node.el.getBoundingClientRect();
-    var frame = stage.getBoundingClientRect();
-    if (box.left < frame.left || box.right > frame.right || box.top < frame.top || box.bottom > frame.bottom) {
-      var ctm = canvas.getScreenCTM();
-      view.x += (frame.left + frame.width / 2 - box.left - box.width / 2) / (ctm ? ctm.a : 1);
-      view.y += (frame.top + frame.height / 2 - box.top - box.height / 2) / (ctm ? ctm.a : 1);
-      applyView();
-    }
+    focusOn(node, instant);
     refresh();
   }
 
-  /* ------------------------------------------------------------ view */
+  /* ------------------------------------------------------------ input */
 
-  function applyView() {
-    viewport.setAttribute(
-      'transform',
-      'translate(' + fmt(view.x) + ' ' + fmt(view.y) + ') scale(' + (Math.round(view.k * 1000) / 1000) + ')'
-    );
+  function hitTest(x, y) {
+    var best = null;
+    var bestScore = -1;
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      if (node.vis === 0) continue;
+      var p = node.proj;
+      var dx = x - p.sx;
+      var dy = y - p.sy;
+      var reach = Math.max(7, p.sr + 4);
+      var d2 = dx * dx + dy * dy;
+      if (d2 > reach * reach) continue;
+      // Front-most wins when two cells overlap on screen.
+      var score = p.depth - d2 / (reach * reach) * 0.35;
+      if (score > bestScore) {
+        bestScore = score;
+        best = node;
+      }
+    }
+    return best;
   }
 
-  function toUser(event) {
-    var ctm = canvas.getScreenCTM();
-    var point = canvas.createSVGPoint();
-    point.x = event.clientX;
-    point.y = event.clientY;
-    if (!ctm) return { x: 0, y: 0 };
-    var local = point.matrixTransform(ctm.inverse());
-    return { x: local.x, y: local.y };
+  function touch() {
+    lastInteraction = Date.now();
   }
-
-  function zoomAt(point, factor) {
-    var k = Math.min(4.5, Math.max(0.35, view.k * factor));
-    var ratio = k / view.k;
-    view.x = point.x - ratio * (point.x - view.x);
-    view.y = point.y - ratio * (point.y - view.y);
-    view.k = k;
-    applyView();
-  }
-
-  canvas.addEventListener('wheel', function (event) {
-    event.preventDefault();
-    zoomAt(toUser(event), Math.exp(-event.deltaY * 0.0016));
-  }, { passive: false });
-
-  document.getElementById('zoom-in').addEventListener('click', function () { zoomAt({ x: 700, y: 430 }, 1.3); });
-  document.getElementById('zoom-out').addEventListener('click', function () { zoomAt({ x: 700, y: 430 }, 1 / 1.3); });
-  document.getElementById('zoom-fit').addEventListener('click', function () {
-    view = { k: 1, x: 0, y: 0 };
-    applyView();
-  });
 
   var drag = null;
-  canvas.addEventListener('pointerdown', function (event) {
-    if (event.target.closest && event.target.closest('.node')) return;
-    drag = { x: event.clientX, y: event.clientY, vx: view.x, vy: view.y, moved: false };
-    canvas.classList.add('panning');
-    if (canvas.setPointerCapture) canvas.setPointerCapture(event.pointerId);
-  });
-  canvas.addEventListener('pointermove', function (event) {
-    if (!drag) return;
-    var ctm = canvas.getScreenCTM();
-    var scale = ctm ? ctm.a : 1;
-    var dx = (event.clientX - drag.x) / scale;
-    var dy = (event.clientY - drag.y) / scale;
-    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
-    view.x = drag.vx + dx;
-    view.y = drag.vy + dy;
-    applyView();
-  });
-  canvas.addEventListener('pointerup', function () {
-    var moved = drag ? drag.moved : false;
-    drag = null;
-    canvas.classList.remove('panning');
-    if (!moved) select(null);
-  });
-  canvas.addEventListener('pointercancel', function () {
-    drag = null;
-    canvas.classList.remove('panning');
+  scene.addEventListener('pointerdown', function (event) {
+    touch();
+    drag = { x: event.clientX, y: event.clientY, yaw: cam.yaw, pitch: cam.pitch, moved: false };
+    scene.classList.add('dragging');
+    if (scene.setPointerCapture) scene.setPointerCapture(event.pointerId);
   });
 
-  /* ------------------------------------------------------------ filters */
+  scene.addEventListener('pointermove', function (event) {
+    if (drag) {
+      var dx = event.clientX - drag.x;
+      var dy = event.clientY - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+      cam.yaw = drag.yaw + dx * 0.0075;
+      cam.pitch = clamp(drag.pitch + dy * 0.006, -1.25, 1.25);
+      focus = null;
+      dirty = true;
+      if (hovered) unhover();
+      return;
+    }
+    var rect = scene.getBoundingClientRect();
+    var found = hitTest(event.clientX - rect.left, event.clientY - rect.top);
+    scene.style.cursor = found ? 'pointer' : 'grab';
+    if (found !== hovered) {
+      if (found) hover(found, event);
+      else unhover();
+    } else if (found) {
+      position(found, event);
+    }
+  });
+
+  scene.addEventListener('pointerup', function (event) {
+    var moved = drag ? drag.moved : false;
+    drag = null;
+    scene.classList.remove('dragging');
+    touch();
+    if (moved) return;
+    var rect = scene.getBoundingClientRect();
+    var found = hitTest(event.clientX - rect.left, event.clientY - rect.top);
+    select(found ? found.key : null);
+  });
+
+  scene.addEventListener('pointercancel', function () {
+    drag = null;
+    scene.classList.remove('dragging');
+  });
+
+  scene.addEventListener('pointerleave', function () {
+    unhover();
+  });
+
+  scene.addEventListener('wheel', function (event) {
+    event.preventDefault();
+    touch();
+    cam.dolly = clamp(cam.dolly * Math.exp(-event.deltaY * 0.0013), 0.42, 3.4);
+    dirty = true;
+  }, { passive: false });
+
+  scene.addEventListener('dblclick', function () {
+    resetCamera();
+  });
+
+  document.getElementById('zoom-in').addEventListener('click', function () {
+    cam.dolly = clamp(cam.dolly * 1.22, 0.42, 3.4);
+    dirty = true;
+  });
+  document.getElementById('zoom-out').addEventListener('click', function () {
+    cam.dolly = clamp(cam.dolly / 1.22, 0.42, 3.4);
+    dirty = true;
+  });
+  document.getElementById('zoom-fit').addEventListener('click', function () {
+    resetCamera();
+  });
+
+  document.addEventListener('keydown', function (event) {
+    var typing = document.activeElement === searchBox;
+    if (event.key === 'Escape') {
+      if (typing && searchBox.value !== '') {
+        searchBox.value = '';
+        refresh();
+        return;
+      }
+      select(null);
+      searchBox.blur();
+    } else if (event.key === '/' && !typing) {
+      event.preventDefault();
+      searchBox.focus();
+    } else if (!typing) {
+      if (event.key === 'ArrowLeft') { cam.yaw -= 0.09; dirty = true; touch(); event.preventDefault() }
+      else if (event.key === 'ArrowRight') { cam.yaw += 0.09; dirty = true; touch(); event.preventDefault() }
+      else if (event.key === 'ArrowUp') { cam.pitch = clamp(cam.pitch - 0.07, -1.25, 1.25); dirty = true; touch(); event.preventDefault() }
+      else if (event.key === 'ArrowDown') { cam.pitch = clamp(cam.pitch + 0.07, -1.25, 1.25); dirty = true; touch(); event.preventDefault() }
+      else if (event.key === '+' || event.key === '=') { cam.dolly = clamp(cam.dolly * 1.15, 0.42, 3.4); dirty = true; touch() }
+      else if (event.key === '-' || event.key === '_') { cam.dolly = clamp(cam.dolly / 1.15, 0.42, 3.4); dirty = true; touch() }
+      else if (event.key === 'f') { resetCamera() }
+    }
+  });
+
+  /* ------------------------------------------------------------ chrome */
+
+  var c = DATA.counts;
+  countsBox.textContent = '';
+  [['卡片', c.cards], ['实体', c.entities], ['项目', c.projects]].forEach(function (pair, i) {
+    if (i > 0) countsBox.appendChild(document.createTextNode(' · '));
+    var b = h('b', null, String(pair[1]));
+    countsBox.appendChild(document.createTextNode(pair[0] + ' '));
+    countsBox.appendChild(b);
+  });
+  if (c.superseded) countsBox.appendChild(document.createTextNode(' · 已替换 ' + c.superseded));
+  if (c.retracted) countsBox.appendChild(document.createTextNode(' · 已撤回 ' + c.retracted));
+  if (DATA.generatedAt) {
+    countsBox.appendChild(document.createTextNode(' · 生成于 ' + String(DATA.generatedAt).replace('T', ' ').slice(0, 16)));
+  }
+
+  [
+    ['decision', '决策'], ['fact', '事实'], ['open_question', '待解'],
+    ['preference', '偏好'], ['note', '记录']
+  ].forEach(function (pair) {
+    var item = h('div', 'item');
+    item.appendChild(h('span', 'dot i-' + pair[0]));
+    item.appendChild(h('span', null, pair[1]));
+    legendBox.appendChild(item);
+  });
+  var ent = h('div', 'item');
+  ent.appendChild(h('span', 'dot i-entity'));
+  ent.appendChild(h('span', null, '实体（越大连得越多）'));
+  legendBox.appendChild(ent);
+  var hub = h('div', 'item');
+  hub.appendChild(h('span', 'dot hollow i-mint'));
+  hub.appendChild(h('span', null, '跨项目枢纽'));
+  legendBox.appendChild(hub);
+  var sup = h('div', 'item');
+  sup.appendChild(h('span', 'dot ringed i-mint'));
+  sup.appendChild(h('span', null, '虚线 = 已被替换'));
+  legendBox.appendChild(sup);
 
   var all = h('option', null, '全部项目 · ' + DATA.counts.cards);
   all.value = '*';
@@ -1501,32 +2113,92 @@ function clientScript(dataJson) {
   projectBox.addEventListener('change', refresh);
   searchBox.addEventListener('input', refresh);
 
-  document.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape') {
-      if (document.activeElement === searchBox && searchBox.value !== '') {
-        searchBox.value = '';
-        refresh();
-        return;
-      }
-      select(null);
-      searchBox.blur();
-    } else if (event.key === '/' && document.activeElement !== searchBox) {
-      event.preventDefault();
-      searchBox.focus();
-    } else if (event.key === 'f' && document.activeElement !== searchBox) {
-      view = { k: 1, x: 0, y: 0 };
-      applyView();
-    }
-  });
+  /* ------------------------------------------------------------ boot */
 
-  applyView();
+  // The address bar can pin a theme, stop the drift, and open one cell:
+  // #dark, #light, #still, and #dark&<card id or entity slug>.
+  var initialTheme = storedTheme();
+  var pendingNode = '';
+  var fragment = String(location.hash || '').replace(/^#/, '');
+  try {
+    fragment = decodeURIComponent(fragment);
+  } catch (error) {
+    // A stray percent sign is not worth a blank page.
+  }
+  fragment.split('&').forEach(function (part) {
+    if (part === 'dark' || part === 'light') initialTheme = part;
+    else if (part === 'still') still = true;
+    else if (part) pendingNode = part;
+  });
+  applyTheme(initialTheme);
+
+  if (nodes.length === 0) {
+    emptyBox.hidden = false;
+    return;
+  }
+
+  if (window.ResizeObserver) {
+    new ResizeObserver(function () { resize() }).observe(stage);
+  } else {
+    window.addEventListener('resize', resize);
+  }
+  resize();
   refresh();
   if (pendingNode) {
     var linked = nodes.filter(function (node) {
       return node.key === pendingNode || node.id === pendingNode || node.slug === pendingNode;
     })[0];
-    if (linked) select(linked.key);
+    // A deep link opens the cell facing the camera, with no easing, so a
+    // screenshot of it is stable.
+    if (linked) select(linked.key, true);
   }
+
+  if (window.matchMedia) {
+    var media = window.matchMedia('(prefers-color-scheme: light)');
+    var onChange = function () {
+      if (storedTheme() === 'auto') rebuildSprites();
+    };
+    if (media.addEventListener) media.addEventListener('change', onChange);
+    else if (media.addListener) media.addListener(onChange);
+  }
+
+  var lastTime = 0;
+  function loop(time) {
+    var dt = lastTime ? Math.min(64, time - lastTime) : 16;
+    lastTime = time;
+    var moving = false;
+
+    if (focus) {
+      var dYaw = focus.yaw - cam.yaw;
+      while (dYaw > Math.PI) dYaw -= Math.PI * 2;
+      while (dYaw < -Math.PI) dYaw += Math.PI * 2;
+      var dPitch = focus.pitch - cam.pitch;
+      var step = Math.min(1, dt / 90) * 0.55;
+      cam.yaw += dYaw * step;
+      cam.pitch += dPitch * step;
+      // Snap when close: a camera that creeps forever never settles, and an
+      // unsettled camera means a screenshot that never repeats.
+      if (Math.abs(dYaw) < 0.005 && Math.abs(dPitch) < 0.005) {
+        cam.yaw = focus.yaw;
+        cam.pitch = focus.pitch;
+        focus = null;
+      }
+      moving = true;
+      dirty = true;
+    } else if (!still && !reduced && !drag && Date.now() - lastInteraction > 2400) {
+      // Idle drift: slow enough to read as breathing, not as spinning.
+      cam.yaw += dt * 0.00007;
+      moving = true;
+      dirty = true;
+    }
+
+    if (dirty || moving) {
+      dirty = false;
+      render();
+    }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
 })();
 `
 }

@@ -347,7 +347,10 @@ check('regenerateGraph writes graph.html', () => {
 check('graph.html is a self-contained page', () => {
   assert.ok(graphHtml.length > 5000, `only ${graphHtml.length} bytes`)
   assert.ok(graphHtml.startsWith('<!doctype html>'), graphHtml.slice(0, 40))
-  assert.ok(graphHtml.includes('<svg'), 'the canvas should be inline svg')
+  // Was '<svg' back when the scene was an SVG document. The scene is a canvas
+  // now: the cloud is drawn with additive halos and a perspective divide, and
+  // SVG can express neither cheaply at 339 cells.
+  assert.ok(graphHtml.includes('<canvas'), 'the scene should be an inline canvas')
   assert.ok(graphHtml.includes('记忆图'), 'the header should name the view')
 })
 check('graph carries every card and entity', () => {
