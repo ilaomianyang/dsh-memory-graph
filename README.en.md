@@ -193,6 +193,10 @@ A few deliberate choices:
 - Automatic runs, the button and `memory_distill` share **one lock**: while a run is in flight, the other callers are told so rather than queued, so two of them can never spend at once.
 - To stop it: `auto.enabled = false` (master switch), or set both rules to 0 (the switch stays on, no rule matches, nothing runs).
 
+![Automatic distillation in Settings: the switch, the two rules, the minimum gap, quiet hours and the project](docs/auto-settings.png)
+
+That is the real thing: master switch on, run once 10 episodes are waiting, top up daily, never closer than 60 minutes apart, quiet hours empty. Save it and the very next tick decides on the new values — no remount, no restart.
+
 ### One distillation runs in batches
 
 `maxEpisodesPerRun` is how many episodes **one distillation** may read, not how many go into one model call. The plugin derives the batch size from `maxOutputTokens` (roughly 320 output tokens per episode), one call per batch, each batch committed before the next: forty episodes become five small calls instead of one request asked to produce forty cards.
@@ -287,7 +291,11 @@ Click an episode and the side panel shows what you actually said that turn:
 
 ![One episode opened](docs/session-tab-open.png)
 
-Both screenshots are from a real session, on a vault that has not been distilled yet — so there are episodes but no cards or entities, which is exactly what the note at the top of the panel says.
+The first screenshot is a vault that has not been distilled yet — episodes but no cards or entities, which is exactly what the note at the top of the panel says. After one **Distill now**, the same session looks like this: purple cards, grey entities, the session itself in the middle, and dashed edges for "this was said here".
+
+![After a distillation: cards in purple, entities in grey, dashed edges back to the session](docs/session-tab-cards.png)
+
+The cards in that picture are what this very conversation distilled into — including the requirements it was asked for.
 
 The data is not baked into the page: the host registers two exact Fetch routes — `/api/memory-graph.graph` (GET, this session's graph) and `/api/memory-graph.distill` (POST, run one distillation when someone presses the button). DSH's Connection verifies the browser's signature first and only lets an owner Peer through, so the plugin needs no second auth scheme and never exposes the vault directory to the page. The layout is computed on the **host** (deterministic force layout) and the browser only draws the coordinates, so reopening the tab shows the same picture.
 
