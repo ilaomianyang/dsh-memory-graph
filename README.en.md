@@ -2,6 +2,8 @@
 
 English · [中文](README.md)
 
+[![test](https://github.com/ilaomianyang/dsh-memory-graph/actions/workflows/test.yml/badge.svg)](https://github.com/ilaomianyang/dsh-memory-graph/actions/workflows/test.yml)
+
 Long-term **associative memory** for [DeepSeek Harness](https://getartcraft.com) (DSH).
 
 Context compaction quietly deletes things. This plugin keeps a second layer — outside the context window, on your own disk, readable by you — so that a decision you made three months ago can still be found.

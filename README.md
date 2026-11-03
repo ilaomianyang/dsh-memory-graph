@@ -2,6 +2,8 @@
 
 [English](README.en.md) · 中文
 
+[![test](https://github.com/ilaomianyang/dsh-memory-graph/actions/workflows/test.yml/badge.svg)](https://github.com/ilaomianyang/dsh-memory-graph/actions/workflows/test.yml)
+
 给 DeepSeek Harness 的**长期联想记忆**插件。上下文压缩会把东西真的抹掉；这个插件在上下文之外留一层持久的、可读的、属于你自己的记忆。
 
 配置在 **设置 → 记忆图谱** 里，一页四组，改完即生效；看的时候有两个地方——**会话页签里的「记忆」**画出这个会话记住了什么，记忆库根目录的 graph.html 画出整个库。
