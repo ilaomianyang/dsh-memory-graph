@@ -94,12 +94,35 @@ await check('the threshold rule fires only once enough episodes have piled up', 
 await check('the schedule rule fires on elapsed time, and 0 disables it', () => {
   const auto = { ...AUTO, minEpisodes: 0, everyMinutes: 60 }
   const now = 10 * 60 * MINUTE
-  // Never attempted: due immediately, or switching the schedule on would mean
-  // waiting an hour for the first run.
-  assert.equal(autoDecision({ auto, now, lastAttemptAt: null, pending: 1 }).rule, 'schedule')
+  // No clock yet is never "overdue": the ticker starts it, so switching a daily
+  // schedule on cannot spend before the first interval has passed.
+  assert.equal(autoDecision({ auto, now, lastAttemptAt: null, pending: 1 }).due, false)
   assert.equal(autoDecision({ auto, now, lastAttemptAt: now - 61 * MINUTE, pending: 1 }).due, true)
   assert.equal(autoDecision({ auto, now, lastAttemptAt: now - 59 * MINUTE, pending: 1 }).due, false)
-  assert.equal(autoDecision({ auto: { ...auto, everyMinutes: 0 }, now, lastAttemptAt: null, pending: 1 }).due, false)
+  assert.equal(autoDecision({ auto: { ...auto, everyMinutes: 0 }, now, lastAttemptAt: now - 999 * MINUTE, pending: 1 }).due, false)
+})
+
+await check('a schedule with no clock starts one instead of spending on the spot', async () => {
+  const { distiller, calls, vault, clock } = makeDistiller({ auto: { ...AUTO, minEpisodes: 0, everyMinutes: 1440 }, pending: 5 })
+  const first = await distiller.tick()
+  assert.equal(first.due, false, 'switching a daily schedule on does not run immediately')
+  assert.equal(first.reason, 'nothing is due yet')
+  assert.equal(calls.length, 0)
+  assert.equal(vault.written.startedAt, clock.at, 'the clock starts now')
+  assert.equal(vault.written.lastAttemptAt, undefined, 'and it is not an attempt: the gap must not be armed by it')
+  clock.at += 24 * 60 * MINUTE
+  const next = await distiller.tick()
+  assert.equal(next.due, true)
+  assert.equal(next.rule, 'schedule')
+  assert.equal(calls.length, 1, 'and a day later it runs')
+})
+
+await check('a threshold with no clock still fires at once: that rule is the pile, not the clock', async () => {
+  const { distiller, calls } = makeDistiller({ auto: { ...AUTO, minEpisodes: 3, everyMinutes: 1440 }, pending: 5 })
+  const decision = await distiller.tick()
+  assert.equal(decision.ran, true)
+  assert.equal(decision.rule, 'threshold')
+  assert.equal(calls.length, 1)
 })
 
 await check('both rules can be on: whichever is satisfied first runs', () => {

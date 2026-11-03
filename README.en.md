@@ -187,6 +187,7 @@ Three gates both rules share:
 
 A few deliberate choices:
 
+- **The schedule clock starts when you switch it on**: it does not run on the spot — a daily schedule should not spend the moment you flip the switch. That clock is stored separately (`startedAt`) and is not treated as "the last run", so it does not push the threshold rule back by one minimum gap either.
 - **The gap is armed before the call**, so a run that produced nothing still counts and will not be re-asked the next minute. It is recorded in `.auto-state.json` in the vault (`lastAttemptAt` only), so **a restart does not reset it**.
 - That file is not `.distill-state.json`: the latter is the **cursor** (which lines have been read), the former is the **attempt clock**. Merging them would make "read, but produced nothing" impossible to express.
 - Automatic runs, the button and `memory_distill` share **one lock**: while a run is in flight, the other callers are told so rather than queued, so two of them can never spend at once.
@@ -332,7 +333,7 @@ Side benefit: an injected message no longer cuts a turn in half, so an episode's
 No network, no real vault:
 
 ```bash
-npm test        # 43 + 13 + 32 + 11 + 22 + 54 + 11 + 17 = 203 checks, plus the 25-question retrieval eval
+npm test        # 43 + 13 + 32 + 11 + 22 + 54 + 11 + 19 = 205 checks, plus the 25-question retrieval eval
 npm run eval    # retrieval eval only (offline, deterministic)
 ```
 

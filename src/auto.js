@@ -39,19 +39,29 @@ export function inQuietHours(window, now) {
  * @param {number} input.pending     undistilled episodes waiting
  * @returns {{due: boolean, rule: string|null, reason: string}}
  */
-export function autoDecision({ auto, now, lastAttemptAt = null, pending = 0 }) {
+export function autoDecision({ auto, now, lastAttemptAt = null, startedAt = null, pending = 0 }) {
   if (auto?.enabled !== true) return { due: false, rule: null, reason: 'auto is off' }
   if (pending <= 0) return { due: false, rule: null, reason: 'nothing to distill' }
   if (inQuietHours(auto.quietHours, now)) return { due: false, rule: null, reason: 'quiet hours' }
 
-  const sinceAttempt = lastAttemptAt === null ? Infinity : now - lastAttemptAt
-  const gap = (auto.minGapMinutes ?? 0) * MINUTE
-  if (gap > 0 && sinceAttempt < gap) return { due: false, rule: null, reason: 'the gap between runs has not elapsed' }
+  // Two different clocks, on purpose:
+  //   * the gap measures time since the last *run* (nothing else);
+  //   * the schedule measures time since the last run, or since the clock was
+  //     started when there has not been one yet.
+  // `null` for either means "not started", and a schedule with no clock is never
+  // overdue — turning a daily schedule on must not spend on the spot. The
+  // threshold rule ignores both clocks: its trigger is the pile, not the time.
+  const sinceRun = lastAttemptAt === null ? null : now - lastAttemptAt
+  const clock = lastAttemptAt ?? startedAt
+  const sinceClock = clock === null ? null : now - clock
 
-  // Schedule rule: "every N minutes" means a run is due once N minutes have
-  // passed since the last attempt — including the very first, so switching it on
-  // does not require waiting for a whole interval before anything happens.
-  if ((auto.everyMinutes ?? 0) > 0 && sinceAttempt >= auto.everyMinutes * MINUTE) {
+  const gap = (auto.minGapMinutes ?? 0) * MINUTE
+  if (gap > 0 && sinceRun !== null && sinceRun < gap) {
+    return { due: false, rule: null, reason: 'the gap between runs has not elapsed' }
+  }
+
+  // Schedule rule: due once `everyMinutes` have passed on its own clock.
+  if ((auto.everyMinutes ?? 0) > 0 && sinceClock !== null && sinceClock >= auto.everyMinutes * MINUTE) {
     return { due: true, rule: 'schedule', reason: `every ${auto.everyMinutes} minute(s)` }
   }
 
@@ -73,6 +83,7 @@ export function autoDecision({ auto, now, lastAttemptAt = null, pending = 0 }) {
 export function createAutoDistiller({ cfg, vault, run, log = () => {}, now = () => Date.now() }) {
   let loaded = false
   let lastAttemptAt = null
+  let startedAt = null
   let lastReport = null
 
   async function loadState() {
@@ -80,8 +91,10 @@ export function createAutoDistiller({ cfg, vault, run, log = () => {}, now = () 
     loaded = true
     try {
       const state = await vault.readAutoState?.()
-      const at = Number(state?.lastAttemptAt)
-      lastAttemptAt = Number.isFinite(at) && at > 0 ? at : null
+      const attempt = Number(state?.lastAttemptAt)
+      const start = Number(state?.startedAt)
+      lastAttemptAt = Number.isFinite(attempt) && attempt > 0 ? attempt : null
+      startedAt = Number.isFinite(start) && start > 0 ? start : null
     } catch (error) {
       log('warn', `auto: could not read .auto-state.json: ${error?.message ?? error}`)
     }
@@ -103,7 +116,21 @@ export function createAutoDistiller({ cfg, vault, run, log = () => {}, now = () 
     }
 
     const at = now()
-    const decision = autoDecision({ auto, now: at, lastAttemptAt, pending })
+    // Start the schedule's clock when it has none yet (just switched on, or a
+    // fresh install) instead of treating it as overdue: switching a daily
+    // schedule on must not spend before the first interval has even passed. This
+    // is a separate field from `lastAttemptAt` so it does not arm the gap and
+    // delay the threshold rule, which has nothing to do with the clock.
+    if ((auto.everyMinutes ?? 0) > 0 && lastAttemptAt === null && startedAt === null) {
+      startedAt = at
+      try {
+        await vault.writeAutoState?.({ startedAt: at })
+      } catch (error) {
+        log('warn', `auto: could not start the schedule clock: ${error?.message ?? error}`)
+      }
+    }
+
+    const decision = autoDecision({ auto, now: at, lastAttemptAt, startedAt, pending })
     if (!decision.due) return { ...decision, pending, ran: false }
 
     // Arm the gap before the call: a slow or failing run must not be retried on

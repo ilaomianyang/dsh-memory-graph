@@ -6,19 +6,20 @@
 
 **Added**
 
-- `src/auto.js`：一个每分钟的节拍 + 一个纯函数决定"这一拍该不该跑"。节拍只做算术（未蒸馏条数、距上次多久、是不是静默时段），**不调模型**；命中规则才跑一次。决定逻辑是纯函数，所以 17 项测试一秒跑完，不用等一分钟也不用花一个 token。
+- `src/auto.js`：一个每分钟的节拍 + 一个纯函数决定"这一拍该不该跑"。节拍只做算术（未蒸馏条数、距上次多久、是不是静默时段），**不调模型**；命中规则才跑一次。决定逻辑是纯函数，所以 19 项测试一秒跑完，不用等一分钟也不用花一个 token。
 - 两条规则：`auto.minEpisodes`（未蒸馏情节攒够 N 条）与 `auto.everyMinutes`（距上次 N 分钟，1440 = 每天）。
 - 三个共用的闸门：`auto.minGapMinutes`（最短间隔，默认 30）、`auto.quietHours`（静默时段，可跨午夜）、`auto.project`（自动卡片记到哪个项目）。
-- 间隔**在调用之前**就落盘到 `.auto-state.json`（只有 `lastAttemptAt`）：跑空了也算数，重启也不重置，否则一个安静的库会被每分钟问一遍。
+- 间隔**在调用之前**就落盘到 `.auto-state.json`（`lastAttemptAt`）：跑空了也算数，重启也不重置，否则一个安静的库会被每分钟问一遍。
 - `src/distillrun.js`：把「一次蒸馏」抽成共享 runner（单飞锁 + 报告 + 视图重建 + 卡片上限）。按钮、`memory_distill`、自动蒸馏三条路走同一把锁——正在跑时第二条路拿到"已经有一次在跑"，不排队。
 - `src/vault.js`：`readAutoState` / `writeAutoState`。和 `.distill-state.json`（游标）分开：游标回答"哪些行读过了"，它回答"上次尝试是什么时候"，混在一起就表达不了"读了但没产出"。
+- 定时蒸的时钟从**打开那一刻**算起（`startedAt`），单独存：刚打开不会立刻花一次调用，也不会因为"时钟刚起"把「攒够就蒸」推迟一个最短间隔。两条规则因此各有各的触发条件，互不牵连。
 - 设置页多了「自动蒸馏」一节（6 个字段，全部 volatile，改完立刻生效）。
 
 **Changed**
 
 - `src/distillapi.js` 只负责把报告翻成 HTTP 状态；锁和报告挪进 `src/distillrun.js`。
 - `memory_distill` 的 `execute` 优先走 runner（`registerTools` 新增可选 `runner`），所以模型要的那次蒸馏不会和一次自动蒸馏撞在一起；`dryRun` 与取消信号照样透传。
-- 测试：`test/client.mjs` 31 → 32、`test/tools.mjs` 21 → 22、`test/distillapi.mjs` 9 → 11、新增 `test/auto.mjs` 17 项，合计 **203** 项。`test/schema.mjs` 的 volatile 叶子数改成"等于页面字段表"，多一格少一格都失败。
+- 测试：`test/client.mjs` 31 → 32、`test/tools.mjs` 21 → 22、`test/distillapi.mjs` 9 → 11、新增 `test/auto.mjs` 19 项，合计 **205** 项。`test/schema.mjs` 的 volatile 叶子数改成"等于页面字段表"，多一格少一格都失败。
 
 **Note**
 
