@@ -1,6 +1,6 @@
 - insert:
     - id: memory-graph
-      name: 'dsh-memory-graph'
+      name: '@ilaomianyang/dsh-memory-graph'
       config:
         vaultDir: ''
         capture:

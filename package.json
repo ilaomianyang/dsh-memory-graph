@@ -1,6 +1,6 @@
 {
-  "name": "dsh-memory-graph",
-  "version": "0.9.1",
+  "name": "@ilaomianyang/dsh-memory-graph",
+  "version": "0.10.0",
   "type": "module",
   "author": "ISKING <admin@isking.cc>",
   "repository": {
@@ -51,7 +51,8 @@
     "eval": "node eval/run.mjs",
     "live": "node test/live.mjs",
     "live:supersede": "node test/live-supersede.mjs",
-    "check": "node --check index.js"
+    "check": "node --check index.js",
+    "prepublishOnly": "npm test"
   },
   "dsh": {
     "bundle": {
@@ -66,7 +67,8 @@
     "node": ">=20"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "license": "MIT",
   "dependencies": {

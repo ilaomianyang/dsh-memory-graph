@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.10.0 — 2026-11-03
+
+**发布到 npm**。`dsh-memory-graph` 这个名字在 npm 上已经被别人占了（maintainer `lilai123`，2026-11-01 发的 0.1.2，是个同名但不同的插件），所以换名发布。
+
+**Changed**
+
+- 包名 `dsh-memory-graph` → `@ilaomianyang/dsh-memory-graph`。跟着改的：`client.js` 的 `PACKAGE_NAME`（宿主按包名核对 client 是否注册，对不上就是 "loaded without registering"）、仓库里 `cordis.patch.yml` 的 `name:`、README 两版的安装与卸载命令。
+- `publishConfig.registry` 显式指向 `https://registry.npmjs.org/`。本机 npm 默认源是 npmmirror，镜像**只读**、不接受发布；不写死这一行，`npm publish` 会打到镜像上然后失败。
+- `scripts.prepublishOnly: npm test`：发布前跑那 231 项，免得发上去一个红的版本。
+
+**Added**
+
+- README 两版新增「从 npm 装」：`plugin_manager action=install_bundle target="@ilaomianyang/dsh-memory-graph"`，并给出国内走 `registry="https://registry.npmmirror.com/"` 的写法（镜像自动同步 npm，滞后几分钟到几小时）。
+
+**Removed**
+
+- `package-lock.json`：里面还写着 `@local/dsh-memory-graph`（第一次本地装时的残留），且只有一个依赖，留着只会误导。
+
+**Note**
+
+- 换名后要重启一次应用：Web 侧的插件清单是启动时扫出来的，进程里缓存，改名跟新装一样得让进程重来。
 ## 0.9.1 — 2026-11-03
 
 0.9.0 的面板能用了，但设置页的保存栏位置是错的：它浮在页面中间，压着「默认返回」那一行，下面还露着别的行。第一眼像"样式不对"，其实是布局方式选错了。

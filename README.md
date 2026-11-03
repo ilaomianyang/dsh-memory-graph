@@ -60,6 +60,16 @@ SQLite 需要处理锁和二进制合并，纯文本可以直接读、直接 gre
 
 ## 安装
 
+**从 npm 装**（不用碰 GitHub）：
+
+```
+plugin_manager action=install_bundle target="@ilaomianyang/dsh-memory-graph"
+```
+
+pnpm 会把唯一的依赖 `@deepseek-ai/schemastery` 一起装好。国内装不动的话，给 `install_bundle` 加 `registry="https://registry.npmmirror.com/"`——npmmirror 会自动同步 npm 上的版本，通常是发布后几分钟到几小时。
+
+**从源码装**（想跟着改的时候）：
+
 ```
 git clone https://github.com/ilaomianyang/dsh-memory-graph
 cd dsh-memory-graph
@@ -72,13 +82,13 @@ npm install                 # 只有一个依赖，Harness 自带的 schema 库
 plugin_manager action=install_bundle target="<clone 下来的绝对路径>"
 ```
 
-`install_bundle` 用 `link:` 方式装本地目录，**不会**替你装依赖，所以上面那步 `npm install` 别跳过。不装也能用，只是设置里看不到那一页。
+这条路 `install_bundle` 用 `link:` 方式装本地目录，**不会**替你装依赖，所以上面那步 `npm install` 别跳过。不装也能用，只是设置里看不到那一页。
 
 想跟着改：`git pull` 之后重载插件即可（`plugin_manager action=set_plugin target="include:memory-graph" enabled=false`，再 `enabled=true`）。
 
 **装完要重启一次 Harness**（关掉窗口重开）。原因不是偷懒：Web 侧的插件清单是启动时扫一遍运行中的 loader 条目、读各自 `package.json` 的 `dsh.client` 字段定下的，这份扫描结果在进程里有缓存，之后不会再读第二遍。所以新装、或者改了 `client.js` / `package.json`，都得让进程重来一次；装完不重启，侧栏里不会有「记忆图谱」，而你手上不会有任何报错提示。
 
-重启后打开 **设置 → 记忆图谱**（在「模型」和「内置插件」之间）。卸载：`plugin_manager action=remove_bundle target="dsh-memory-graph"`。**记忆库不会被删**，它在 `~/dsh-memory`，独立于插件。
+重启后打开 **设置 → 记忆图谱**（在「模型」和「内置插件」之间）。卸载：`plugin_manager action=remove_bundle target="@ilaomianyang/dsh-memory-graph"`。**记忆库不会被删**，它在 `~/dsh-memory`，独立于插件。
 
 ## 你的记忆库长什么样
 
