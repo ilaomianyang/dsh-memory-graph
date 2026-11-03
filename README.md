@@ -376,7 +376,7 @@ Harness 会把运行时快照、技能目录、时间戳、审批通知、压缩
 零依赖，不联网，不碰真实记忆库：
 
 ```bash
-npm test        # 43 + 13 + 35 + 12 + 22 + 54 + 15 + 7 + 11 + 19 = 231 项检查，另加 25 题检索评测
+npm test        # 43 + 13 + 35 + 12 + 22 + 54 + 15 + 8 + 11 + 19 = 232 项检查，另加 25 题检索评测
 npm run eval    # 只跑检索评测（离线，确定性的）
 ```
 
@@ -415,7 +415,7 @@ npm version minor -m "chore(release): v%s" && git push --follow-tags   # minor /
 
 1. 核对 tag 和 `package.json` 的版本号——不一致就失败，不会发出一个版本号对不上的包；
 2. 查这个版本是不是已经在注册表上——在就跳过，重推同一个 tag 是空操作而不是报错；
-3. `npm publish --provenance --access public`（`prepublishOnly` 会再跑一遍那 231 项，红的进不去）；
+3. `npm publish --provenance --access public`（`prepublishOnly` 会再跑一遍那 232 项，红的进不去）；
 4. npm 页面上多一条「Built and signed on GitHub Actions」，证明这个 tarball 是从这个仓库的这个提交构建的。
 
 凭据有两条路，工作流两条都认（有 `NPM_TOKEN` 就用它，没有就走 OIDC）：

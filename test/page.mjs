@@ -72,6 +72,23 @@ await check('it is the same renderer the vault writes to disk', async () => {
   assert.equal(skeleton(served), skeleton(onDisk))
 })
 
+await check('every node carries the numbers the renderer multiplies', async () => {
+  const handler = createPageHandler({ getVault: () => vault })
+  const html = await (await handler()).text()
+  // The halo is drawn at r * haloScale. haloScale was computed in the model and
+  // then left out of the payload, so the browser multiplied by undefined, every
+  // halo became <circle r="NaN">, and the glow never appeared — one console
+  // error per node, invisible in a screenshot. Assert the payload, and assert
+  // the page never renders the word at all.
+  const data = JSON.parse(html.match(/var DATA = (\{.*\})/)[1])
+  assert.ok(data.nodes.length > 0, 'the fixture wrote a card, so there is a node')
+  for (const node of data.nodes) {
+    assert.ok(Number.isFinite(node.r), `${node.key} has a numeric radius`)
+    assert.ok(Number.isFinite(node.haloScale), `${node.key} carries the halo scale the renderer multiplies by`)
+  }
+  assert.ok(!html.includes('NaN'), 'no attribute is rendered as NaN')
+})
+
 await check('the page is frameable by its own origin and nothing else', async () => {
   const handler = createPageHandler({ getVault: () => vault })
   const response = await handler()

@@ -499,6 +499,9 @@ function toPayload({ cards, entities, projects, generatedAt }) {
       x: node.x,
       y: node.y,
       r: node.r,
+      // The renderer draws the halo at r * haloScale; leaving this out of the
+      // payload made that multiplication NaN and every halo a `r="NaN"` circle.
+      haloScale: node.haloScale,
       degree: node.degree,
       projects: node.projects,
       labelAt: node.labelPos,

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.10.2 — 2026-11-03
+
+补一个从第一天就存在的渲染缺陷，并让发布流水线第一次真正跑完。
+
+**Fixed**
+
+- 图里每个节点的光晕（halo）一直是 `r="NaN"`。`haloScale` 在模型里算好了（实体 2.5、卡片 2.7），序列化给页面的 payload 时漏了这个字段，浏览器做 `node.r * undefined` 得到 NaN，柔光画不出来，控制台上每个节点报一条 `<circle> attribute r: Expected length, "NaN"`。截图上完全看不出来——缺的是柔光，不是骨架——只有打开控制台才发现。现在 payload 带上 `haloScale`。
+- `test/page.mjs` 加一条检查兜住这一类问题：解析页面里的 `DATA`，断言每个节点的 `r` 与 `haloScale` 都是有限数，并且整页不出现字面量 `NaN`。
+
+**Changed**
+
+- 检查数 231 → 232（README 两版、`test.yml` 的注释同步）。
+
+**已发布到 npm：`@ilaomianyang/dsh-memory-graph@0.10.2`，由 GitHub Actions 用 trusted publishing（OIDC，仓库里不存任何 token）发布，带 SLSA provenance。**
+
+## 0.10.1 — 2026-11-03
+
+**Added**
+
+- `.github/workflows/publish.yml`：推 `v*` tag 就发布，不再靠本机 `npm publish`。核对 tag 与 `package.json`、跳过已发布的版本（重推 tag 是空操作）、`npm publish --provenance`，npm 页面上因此有「Built and signed on GitHub Actions」。
+- `npm run release`：跑测试 → bump → 提交 → 打 tag → 推 tag 的一条命令。
+- 首版流水线踩了两个坑，都只影响 CI，与插件本身无关：`npm view` 在「版本尚未发布」时退出码为 1，而 runner 打开了 `PSNativeCommandUseErrorActionPreference`，这个预期内的非零退出直接把守门步骤干掉了；改成直接读 registry 文档判断。另外 trusted publishing 需要 npm ≥ 11.5.1，Node 22 自带 10.x，所以先 `npm install -g npm@latest`。
+
 ## 0.10.0 — 2026-11-03
 
 **已发布到 npm：`npm i @ilaomianyang/dsh-memory-graph`（0.10.0，2026-11-03）。** npmmirror 已同步，国内直接装。`dsh-memory-graph` 这个名字在 npm 上已经被别人占了（maintainer `lilai123`，2026-11-01 发的 0.1.2，是个同名但不同的插件），所以换名发布。

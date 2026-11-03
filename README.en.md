@@ -383,7 +383,7 @@ Side benefit: an injected message no longer cuts a turn in half, so an episode's
 No network, no real vault:
 
 ```bash
-npm test        # 43 + 13 + 35 + 12 + 22 + 54 + 15 + 7 + 11 + 19 = 231 checks, plus the 25-question retrieval eval
+npm test        # 43 + 13 + 35 + 12 + 22 + 54 + 15 + 8 + 11 + 19 = 232 checks, plus the 25-question retrieval eval
 npm run eval    # retrieval eval only (offline, deterministic)
 ```
 
@@ -422,7 +422,7 @@ The tag triggers `.github/workflows/publish.yml`, which does four things:
 
 1. checks that the tag and `package.json` agree — a mismatch fails instead of publishing a package whose version lies;
 2. checks whether that version is already on the registry — if so it skips, so re-running a tag is a no-op rather than an error;
-3. `npm publish --provenance --access public` (`prepublishOnly` runs the 231 checks again; a red build cannot reach the registry);
+3. `npm publish --provenance --access public` (`prepublishOnly` runs the 232 checks again; a red build cannot reach the registry);
 4. adds "Built and signed on GitHub Actions" to the npm page, proving the tarball came from this commit of this repository.
 
 Two ways to authenticate; the workflow accepts both (it uses `NPM_TOKEN` when the secret exists and falls back to OIDC when it does not):
