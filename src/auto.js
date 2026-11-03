@@ -32,14 +32,30 @@ export function inQuietHours(window, now) {
  * Should this tick run a distillation? Pure, so the rules are readable in one
  * place and testable without a clock.
  *
+ * Three rules, in the order they are asked:
+ *
+ * 1. **catch-up** — a pile bigger than one batch is a queue, not a schedule. It
+ *    runs every `catchUpEveryMinutes` until the pile is smaller than a batch, and
+ *    stops for the day at `maxBatchesPerDay`. This is the rule that lets an
+ *    imported history drain itself overnight without a person pressing anything,
+ *    and the daily cap is what keeps it from spending without a ceiling.
+ * 2. **schedule** — `everyMinutes` since the last run (or since the clock
+ *    started).
+ * 3. **threshold** — `minEpisodes` waiting.
+ *
+ * The gap (`minGapMinutes`) sits between 1 and 2/3: catch-up measures its own
+ * cadence, while the other two answers still respect the gap a person configured.
+ *
  * @param {object} input
  * @param {object} input.auto        the `auto` config group
  * @param {number} input.now         epoch ms
  * @param {number|null} input.lastAttemptAt  epoch ms of the previous attempt
  * @param {number} input.pending     undistilled episodes waiting
+ * @param {number} [input.batchSize] episodes one run distils
+ * @param {number} [input.batchesToday] automatic batches already run today
  * @returns {{due: boolean, rule: string|null, reason: string}}
  */
-export function autoDecision({ auto, now, lastAttemptAt = null, startedAt = null, pending = 0 }) {
+export function autoDecision({ auto, now, lastAttemptAt = null, startedAt = null, pending = 0, batchSize = 40, batchesToday = 0 }) {
   if (auto?.enabled !== true) return { due: false, rule: null, reason: 'auto is off' }
   if (pending <= 0) return { due: false, rule: null, reason: 'nothing to distill' }
   if (inQuietHours(auto.quietHours, now)) return { due: false, rule: null, reason: 'quiet hours' }
@@ -54,6 +70,24 @@ export function autoDecision({ auto, now, lastAttemptAt = null, startedAt = null
   const sinceRun = lastAttemptAt === null ? null : now - lastAttemptAt
   const clock = lastAttemptAt ?? startedAt
   const sinceClock = clock === null ? null : now - clock
+
+  // Catch-up first: its cadence is its own, and it is the only rule that can be
+  // due while the gap configured for the others has not elapsed.
+  if (auto.catchUp === true && pending >= Math.max(1, batchSize)) {
+    const cap = auto.maxBatchesPerDay ?? 0
+    if (cap > 0 && batchesToday >= cap) {
+      return { due: false, rule: null, reason: `今日已跑 ${batchesToday} 批，达到上限 ${cap} · daily batch cap reached` }
+    }
+    const every = Math.max(1, auto.catchUpEveryMinutes ?? 10) * MINUTE
+    if (sinceRun === null || sinceRun >= every) {
+      return {
+        due: true,
+        rule: 'catch-up',
+        reason: `还有 ${pending} 条待蒸馏，今天第 ${batchesToday + 1} 批${cap > 0 ? ` / 上限 ${cap}` : ''}`,
+      }
+    }
+    return { due: false, rule: null, reason: `距上一批不到 ${auto.catchUpEveryMinutes ?? 10} 分钟 · catch-up gap` }
+  }
 
   const gap = (auto.minGapMinutes ?? 0) * MINUTE
   if (gap > 0 && sinceRun !== null && sinceRun < gap) {
@@ -85,6 +119,8 @@ export function createAutoDistiller({ cfg, vault, run, log = () => {}, now = () 
   let lastAttemptAt = null
   let startedAt = null
   let lastReport = null
+  let day = null
+  let batchesToday = 0
 
   async function loadState() {
     if (loaded) return
@@ -95,9 +131,19 @@ export function createAutoDistiller({ cfg, vault, run, log = () => {}, now = () 
       const start = Number(state?.startedAt)
       lastAttemptAt = Number.isFinite(attempt) && attempt > 0 ? attempt : null
       startedAt = Number.isFinite(start) && start > 0 ? start : null
+      day = typeof state?.batchDay === 'string' ? state.batchDay : null
+      const count = Number(state?.batchesToday)
+      batchesToday = Number.isFinite(count) && count > 0 ? count : 0
     } catch (error) {
       log('warn', `自动蒸馏：读不了 .auto-state.json · auto: could not read .auto-state.json: ${error?.message ?? error}`)
     }
+  }
+
+  /** Today's local date, the key the daily batch cap resets on. */
+  function todayKey(at) {
+    const date = new Date(at)
+    const pad = (value) => String(Math.abs(value)).padStart(2, '0')
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
   }
 
   /** One decision, and at most one run. Returns what it decided, for the tests. */
@@ -106,9 +152,13 @@ export function createAutoDistiller({ cfg, vault, run, log = () => {}, now = () 
     await loadState()
     if (auto.enabled !== true) return { due: false, rule: null, reason: 'auto is off', ran: false }
 
+    const batchSize = Math.max(1, cfg.extractor?.maxEpisodesPerRun ?? 40)
     let pending = 0
     try {
-      const batch = await vault.readUndistilled(Math.max(1, auto.minEpisodes ?? 0, cfg.extractor?.maxEpisodesPerRun ?? 40))
+      // Ask for one batch more than a batch: the decision needs to know whether a
+      // *full* batch is waiting (catch-up) and whether the threshold is met, and
+      // one extra row answers both without a second read.
+      const batch = await vault.readUndistilled(Math.max(1, auto.minEpisodes ?? 0, batchSize))
       pending = Array.isArray(batch) ? batch.length : 0
     } catch (error) {
       log('warn', `自动蒸馏：数不了还没蒸馏的情节 · auto: could not count undistilled episodes: ${error?.message ?? error}`)
@@ -130,14 +180,25 @@ export function createAutoDistiller({ cfg, vault, run, log = () => {}, now = () 
       }
     }
 
-    const decision = autoDecision({ auto, now: at, lastAttemptAt, startedAt, pending })
-    if (!decision.due) return { ...decision, pending, ran: false }
+    // The daily cap is per calendar day, and a new day resets it — in memory now
+    // and on disk with the next write, so a restart cannot lose the count either.
+    const today = todayKey(at)
+    if (day !== today) {
+      day = today
+      batchesToday = 0
+    }
+
+    const decision = autoDecision({ auto, now: at, lastAttemptAt, startedAt, pending, batchSize, batchesToday })
+    if (!decision.due) return { ...decision, pending, batchesToday, ran: false }
 
     // Arm the gap before the call: a slow or failing run must not be retried on
     // the next tick.
     lastAttemptAt = at
+    // Counted before the call, like the gap: a run that fails or finds another one
+    // in flight still spent this batch's slot, so the daily cap stays a real cap.
+    if (decision.rule === 'catch-up') batchesToday += 1
     try {
-      await vault.writeAutoState?.({ lastAttemptAt: at })
+      await vault.writeAutoState?.(decision.rule === 'catch-up' ? { lastAttemptAt: at, batchDay: today, batchesToday } : { lastAttemptAt: at })
     } catch (error) {
       log('warn', `自动蒸馏：没能记下这次尝试 · auto: could not record the attempt: ${error?.message ?? error}`)
     }
@@ -158,12 +219,12 @@ export function createAutoDistiller({ cfg, vault, run, log = () => {}, now = () 
         `自动蒸馏 auto (${decision.rule}): ${report?.message ?? report?.reason ?? '没有运行 · did not run'}`,
       )
     }
-    return { ...decision, pending, ran: true, report }
+    return { ...decision, pending, batchesToday, ran: true, report }
   }
 
   /** What the ticker knows, for a diagnostics line or a test. */
   function state() {
-    return { lastAttemptAt, lastReport }
+    return { lastAttemptAt, lastReport, batchesToday, day }
   }
 
   return { tick, state }

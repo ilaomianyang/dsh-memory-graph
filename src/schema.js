@@ -292,6 +292,60 @@ const auto = z.object({
       .default('')
       .description('自动蒸馏记到哪个项目；空 = 最近情节的项目 · project for automatic cards; empty = the newest episode\'s project'),
   ),
+  catchUp: live(
+    z
+      .boolean()
+      .default(false)
+      .description('追平模式：只要还攒着一整批就按自己的节奏一批批蒸下去 · catch-up: keep distilling batch after batch while a full batch is still waiting'),
+  ),
+  catchUpEveryMinutes: live(
+    z
+      .number()
+      .min(1)
+      .max(1440)
+      .step(1)
+      .default(10)
+      .description('追平模式每批之间隔多少分钟 · minutes between catch-up batches'),
+  ),
+  maxBatchesPerDay: live(
+    z
+      .number()
+      .min(0)
+      .max(200)
+      .step(1)
+      .default(6)
+      .description('一天最多自动蒸几批；0 = 不限 · most automatic batches per day; 0 lifts the cap'),
+  ),
+})
+
+const update = z.object({
+  enabled: live(
+    z
+      .boolean()
+      .default(true)
+      .description('定期检查 npm 上有没有新版本（只查，不装）· check npm for a newer version (checks only, never installs)'),
+  ),
+  checkEveryHours: live(
+    z
+      .number()
+      .min(1)
+      .max(720)
+      .step(1)
+      .default(12)
+      .description('查到的结果保持多久 · hours a check result stays good for'),
+  ),
+  autoInstall: live(
+    z
+      .boolean()
+      .default(false)
+      .description('启动时发现新版本就自动装（link: 本地安装会拒绝）· install a newer version at startup; a link: install is refused'),
+  ),
+  registry: live(
+    z
+      .string()
+      .default('')
+      .description('用哪个 npm 源查版本；空 = 宿主的源，再退到 npmjs · registry to ask; empty = the harness\'s, then npmjs'),
+  ),
 })
 
 export const Config = z.object({
@@ -317,6 +371,7 @@ export const Config = z.object({
   privacy,
   extractor,
   auto,
+  update,
   retrieval,
 })
 

@@ -34,6 +34,13 @@ const DISTILL_API = '/api/memory-graph.distill'
  */
 const PANEL_ID = 'memory-graph'
 const PAGE_API = '/api/memory-graph.page'
+/**
+ * Version and self-update. One path, split by method: GET reports what is
+ * installed and whether the registry has something newer, POST asks the host to
+ * install it. Both answers carry their own `message`, so this page never has to
+ * invent wording for a state the host already described.
+ */
+const UPDATE_API = '/api/memory-graph.update'
 
 const ZH = (() => {
   try {
@@ -372,6 +379,95 @@ const SECTIONS = [
         placeholder: t('留空 = 最近情节的项目', "empty = the newest episode's project"),
         label: t('记到哪个项目', 'Project'),
         hint: t('自动蒸馏出的卡片归属哪个项目。', 'Which project automatic cards are filed under.'),
+      },
+      {
+        path: ['auto', 'catchUp'],
+        type: 'boolean',
+        label: t('追平模式', 'Catch up'),
+        hint: t(
+          '只要还攒着一整批未蒸馏的情节，就按下面自己的节奏一批批蒸下去，直到追平；日常的「定时蒸」「攒够就蒸」不受影响。导入过历史、或者很久没开的时候用它。',
+          'While a full batch of undistilled episodes is still waiting, keep distilling batch after batch on its own pace below until the backlog drains; the two rules above keep working as usual. Meant for imported histories and long gaps.',
+        ),
+      },
+      {
+        path: ['auto', 'catchUpEveryMinutes'],
+        type: 'number',
+        min: 1,
+        max: 1440,
+        step: 1,
+        unit: t('分钟', 'min'),
+        label: t('追平间隔', 'Catch-up gap'),
+        hint: t(
+          '追平模式下每批之间隔多少分钟（默认 10）。这条节奏独立于上面的「最短间隔」。',
+          'Minutes between catch-up batches (default 10). This pace is independent of the minimum gap above.',
+        ),
+      },
+      {
+        path: ['auto', 'maxBatchesPerDay'],
+        type: 'number',
+        min: 0,
+        max: 200,
+        step: 1,
+        unit: t('批', 'batches'),
+        label: t('每天最多几批', 'Daily batch cap'),
+        hint: t(
+          '一天最多自动蒸几批，0 = 不限（默认 6）。这是唯一给自动花钱设上限的旋钮。',
+          'Most automatic batches in one calendar day; 0 lifts the cap (default 6). The only knob that caps what automatic runs can spend.',
+        ),
+      },
+    ],
+  },
+  {
+    id: 'update',
+    title: t('版本与更新', 'Version & updates'),
+    hint: t(
+      '检查更新只发一次 GET，问的是 npm 上有没有新版本，不带任何记忆库内容或用户信息。安装走宿主自己的 pluginManager，和 dsh plugin 是同一条路。',
+      'A check is one GET against the registry — no vault contents and no user data in it. Installing goes through the host\'s own pluginManager, the same path dsh plugin takes.',
+    ),
+    fields: [
+      {
+        path: ['update', 'enabled'],
+        type: 'boolean',
+        label: t('检查更新', 'Check for updates'),
+        hint: t(
+          '定期问 npm 上有没有新版本，只查不装。关掉之后不再联网查版本，页面也不会自动查，「检查更新」按钮一起变灰。',
+          'Periodically asks npm whether a newer version exists, and only asks. Off means no network checks and no automatic read on this page; the Check button greys out with it.',
+        ),
+      },
+      {
+        path: ['update', 'checkEveryHours'],
+        type: 'number',
+        min: 1,
+        max: 720,
+        step: 1,
+        unit: t('小时', 'hours'),
+        label: t('多久查一次', 'Check every'),
+        hint: t(
+          '查到的结果保持这么久，期间打开设置页不再重复请求。',
+          'A result stays good for this long, so reopening this page does not ask again.',
+        ),
+        visible: (value) => getPath(value, ['update', 'enabled']) !== false,
+      },
+      {
+        path: ['update', 'autoInstall'],
+        type: 'boolean',
+        label: t('自动安装新版本', 'Install updates automatically'),
+        hint: t(
+          '启动时发现有新版本就装（装完要重启 Harness 才生效）；link: 本地安装会拒绝而不是覆盖。',
+          'Installs a newer version at startup; the running process still needs a restart. A link: install is refused rather than overwritten.',
+        ),
+        visible: (value) => getPath(value, ['update', 'enabled']) !== false,
+      },
+      {
+        path: ['update', 'registry'],
+        type: 'text',
+        placeholder: t('留空 = 宿主的源', 'empty = the harness registry'),
+        label: t('用哪个 npm 源', 'Registry'),
+        hint: t(
+          '留空就先用 Harness 配的源，再退到 registry.npmjs.org。',
+          "Empty means the harness's own registry first, then registry.npmjs.org.",
+        ),
+        visible: (value) => getPath(value, ['update', 'enabled']) !== false,
       },
     ],
   },
@@ -748,6 +844,63 @@ const CSS = `
   cursor: pointer;
 }
 .mg-btn-ghost:disabled { opacity: 0.55; cursor: default; }
+/* The version strip inside the update section: header, then this line, then the
+   fields. Not a card and not an mg-* class — it is not a config knob and the
+   suite reads mg-card / mg-row / mg-btn to mean knobs and the save bar. */
+.mgu-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 14px 10px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.08));
+}
+.mgu-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.mgu-main { flex: 1 1 auto; min-width: 0; }
+.mgu-label { display: flex; align-items: center; gap: 6px; font-weight: 500; }
+.mgu-hint { color: var(--dsw-alias-label-tertiary, #808080); font-size: 11.5px; margin-top: 2px; }
+.mgu-tag {
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-hover, rgba(59, 110, 240, 0.14));
+  color: var(--dsw-alias-brand-primary, #3b6ef0);
+}
+.mgu-tag[data-kind="muted"] {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.06));
+  color: var(--dsw-alias-label-secondary, #5a5a5a);
+}
+.mgu-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+.mgu-check {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.16));
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.mgu-check:disabled { opacity: 0.55; cursor: default; }
+.mgu-go {
+  height: 28px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 7px;
+  background: var(--dsw-alias-brand-primary, #3b6ef0);
+  color: var(--dsw-alias-label-primary-foreground, #fff);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.mgu-go:disabled { opacity: 0.55; cursor: default; }
+.mgu-msg { font-size: 11.5px; }
+.mgu-msg[data-kind="ok"] { color: var(--dsw-alias-state-success-primary, #1a7f37); }
+.mgu-msg[data-kind="error"] { color: var(--dsw-alias-state-error-primary, #c62828); }
+.mgu-msg[data-kind="busy"] { color: var(--dsw-alias-label-tertiary, #808080); }
+.mgu-msg[data-kind="info"] { color: var(--dsw-alias-label-secondary, #5a5a5a); }
 /* The whole-vault panel: a bar, then the served page filling the rest. */
 .mgv-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .mgv-panel-bar {
@@ -1070,6 +1223,142 @@ function createPage(ctx, React) {
 
     const dirtyCount = ALL_FIELDS.filter((field) => isDirty(field)).length
 
+    // ---- version & updates ------------------------------------------------
+    //
+    // The host owns every decision here: whether a check is possible, what is
+    // installed, whether it may install itself. This page only asks, prints the
+    // answer the host gave, and keeps its own errors local — a settings page that
+    // blanks out because one route is missing or slow is worse than one that says
+    // which route failed.
+
+    const [updateInfo, setUpdateInfo] = useState(null)
+    const [updateError, setUpdateError] = useState('')
+    const [checking, setChecking] = useState(false)
+    const [applying, setApplying] = useState(false)
+    const [updateNote, setUpdateNote] = useState(null)
+    const updateMounted = useRef(true)
+    const updateTimers = useRef([])
+
+    const stopUpdateTimers = () => {
+      for (const timer of updateTimers.current) clearTimeout(timer)
+      updateTimers.current = []
+    }
+
+    /** One GET. `manual` is the 检查更新 button: it asks the host to re-check the registry. */
+    const readUpdate = (manual) => {
+      if (manual === true) setChecking(true)
+      const send = typeof fetch === 'function' ? fetch : null
+      if (!send) {
+        setChecking(false)
+        setUpdateError(
+          '这一页拿不到 fetch，版本只能手动查：npm view @ilaomianyang/dsh-memory-graph version · ' +
+            'No fetch in this page, so read the version from the shell instead',
+        )
+        return
+      }
+      let pending
+      try {
+        pending = send(apiUrl(manual === true ? `${UPDATE_API}?force=1` : UPDATE_API), {
+          method: 'GET',
+          headers: { accept: 'application/json' },
+          credentials: 'same-origin',
+          cache: 'no-store',
+        })
+      } catch (error) {
+        setChecking(false)
+        setUpdateError(`读不到版本信息：${String((error && error.message) || error)}`)
+        return
+      }
+      Promise.resolve(pending)
+        .then((response) =>
+          response
+            .json()
+            .catch(() => null)
+            .then((body) => ({ response, body })),
+        )
+        .then(({ response, body }) => {
+          if (!updateMounted.current) return
+          setChecking(false)
+          if (!response.ok || !body || body.ok !== true) {
+            const why = (body && (body.error || body.message)) || `HTTP ${response.status}`
+            setUpdateError(String(why))
+            return
+          }
+          setUpdateError('')
+          setUpdateInfo(body)
+        })
+        .catch((failure) => {
+          if (!updateMounted.current) return
+          setChecking(false)
+          setUpdateError(
+            `连不上宿主：${String((failure && failure.message) || failure)} · Could not reach the host`,
+          )
+        })
+    }
+
+    /** One POST, then three GETs: the host finishes the install behind the answer. */
+    const applyUpdate = () => {
+      if (applying) return
+      stopUpdateTimers()
+      setApplying(true)
+      setUpdateNote({ kind: 'busy', text: '正在更新，别关这一页… · Updating; keep this page open' })
+      const send = typeof fetch === 'function' ? fetch : null
+      if (!send) {
+        setApplying(false)
+        setUpdateNote({ kind: 'error', text: '这一页拿不到 fetch，更新只能手动做 · No fetch here; update by hand' })
+        return
+      }
+      let pending
+      try {
+        pending = send(apiUrl(UPDATE_API), {
+          method: 'POST',
+          headers: { accept: 'application/json', 'content-type': 'application/json' },
+          credentials: 'same-origin',
+          body: '{}',
+        })
+      } catch (error) {
+        setApplying(false)
+        setUpdateNote({ kind: 'error', text: `更新没能执行：${String((error && error.message) || error)}` })
+        return
+      }
+      Promise.resolve(pending)
+        .then((response) =>
+          response
+            .json()
+            .catch(() => null)
+            .then((body) => ({ response, body })),
+        )
+        .then(({ response, body }) => {
+          if (!updateMounted.current) return
+          setApplying(false)
+          setUpdateNote(describeUpdate(response, body))
+          // 2s / 4s / 8s after the answer: the install is written behind it, so the
+          // version line catches up without the user pressing anything.
+          for (const wait of [2000, 4000, 8000]) {
+            updateTimers.current.push(setTimeout(() => readUpdate(false), wait))
+          }
+        })
+        .catch((failure) => {
+          if (!updateMounted.current) return
+          setApplying(false)
+          setUpdateNote({
+            kind: 'error',
+            text: `连不上宿主：${String((failure && failure.message) || failure)} · Could not reach the host`,
+          })
+        })
+    }
+
+    useEffect(() => {
+      updateMounted.current = true
+      readUpdate(false)
+      return () => {
+        updateMounted.current = false
+        stopUpdateTimers()
+      }
+      // Read once when the page opens; every later read is a button or a poll.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+
     // ---- states that are not the form ------------------------------------
 
     const statePanel = (title, lines) =>
@@ -1224,6 +1513,102 @@ function createPage(ctx, React) {
 
     const visibleFields = (section) => section.fields.filter((field) => !field.visible || field.visible(shownValue))
 
+    // ---- the version strip ------------------------------------------------
+    //
+    // Drawn inside the `update` section, between its header and its rows: the
+    // page already names the section, so this is one line — version, two buttons,
+    // and whatever the host last said. It writes no config path, and the suite
+    // reads `mg-card`/`mg-row`/`mg-btn` to mean "a knob" and "the save bar", so
+    // this keeps its own `mgu-*` names and its own buttons.
+
+    const updateBlock = () => {
+      const info = updateInfo
+      const link = Boolean(info && info.installKind === 'link')
+      const working = applying || Boolean(info && info.busy === true)
+      // The host already decided both questions: `canCheck` is off when update
+      // checks are disabled in the settings, `canInstall` is on only when there is
+      // a newer version, the install came from the registry, and nothing else is
+      // running. Asking it again here would only invent a second opinion.
+      const canCheck = !info || info.canCheck !== false
+      const canInstall = Boolean(info) && info.canInstall === true
+      const blockedBehind = Boolean(info) && info.behind === true && info.canInstall !== true && !link && !working
+      const versionText = info && info.current ? String(info.current) : checking ? '…' : '—'
+
+      const hints = []
+      if (info) {
+        if (link) {
+          hints.push(
+            '本地 link: 安装，自动更新会覆盖你的开发目录 · installed as a link:, so updating would overwrite your working copy',
+          )
+        } else if (info.installKind === 'registry') {
+          hints.push('从 npm registry 安装 · installed from the npm registry')
+        } else {
+          hints.push('安装方式未知 · install kind unknown')
+        }
+        // "Cannot update itself" is only true when there is something to install
+        // and the host still said no — busy means wait, not unable.
+        if (working) hints.push('正在安装，装完再看这里 · installing now; this line updates when it lands')
+        else if (blockedBehind) hints.push('这个安装不能自动更新 · this installation cannot update itself')
+        if (info.registry) hints.push(`源 registry：${info.registry}`)
+        if (info.checkedAt) hints.push(`上次检查 ${info.checkedAt}`)
+      } else if (updateError === '') {
+        hints.push('正在读版本… · reading the version…')
+      }
+
+      const status = updateError
+        ? { kind: 'error', text: updateError }
+        : updateNote || (info && info.message ? { kind: 'info', text: String(info.message) } : null)
+
+      return h(
+        'div',
+        { className: 'mgu-strip', 'data-update': updateError ? 'error' : info ? 'ready' : 'reading' },
+        h(
+          'div',
+          { className: 'mgu-line' },
+          h(
+            'div',
+            { className: 'mgu-main' },
+            h(
+              'div',
+              { className: 'mgu-label' },
+              h('span', null, '当前版本 · Current version'),
+              info && info.behind === true ? h('span', { className: 'mgu-tag' }, '有新版本 · behind') : null,
+              info && info.behind === false
+                ? h('span', { className: 'mgu-tag', 'data-kind': 'muted' }, '已是最新 · up to date')
+                : null,
+            ),
+            hints.length > 0 ? h('div', { className: 'mgu-hint' }, hints.join(' · ')) : null,
+          ),
+          h(
+            'div',
+            { className: 'mgu-actions' },
+            h('span', { className: 'mg-code' }, versionText),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'mgu-check',
+                disabled: checking || working || !canCheck,
+                onClick: () => readUpdate(true),
+              },
+              checking ? '检查中… · Checking…' : '检查更新 · Check',
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'mgu-go',
+                disabled: !canInstall || working || checking || updateError !== '',
+                onClick: () => applyUpdate(),
+              },
+              working ? '更新中… · Updating…' : '更新 · Update',
+            ),
+          ),
+        ),
+        status ? h('div', { className: 'mgu-msg', 'data-kind': status.kind }, status.text) : null,
+      )
+    }
+
     return h(
       'div',
       { className: 'mg-page' },
@@ -1254,6 +1639,10 @@ function createPage(ctx, React) {
               h('div', { className: 'mg-card-t' }, section.title),
               section.hint ? h('div', { className: 'mg-card-d' }, section.hint) : null,
             ),
+            // The version strip belongs to this section's header area, not to the
+            // field table: it is not a config path. It reads and writes nothing the
+            // form owns, so it sits between the header and the rows.
+            section.id === 'update' ? updateBlock() : null,
             h('div', { className: 'mg-rows' }, visibleFields(section).map(row)),
           ),
         ),
@@ -1365,6 +1754,49 @@ function apiUrl(path) {
     // No usable location: fall through to the bare path.
   }
   return path
+}
+
+/**
+ * The POST answer as one line, Chinese first and the English after it — the same
+ * style the rest of the plugin writes user-facing text in.
+ *
+ * The four `application` values are the host's contract and they are not
+ * interchangeable: `restart-required` means the files changed but the running
+ * process did not, so the line must ask for a restart instead of claiming the
+ * new version is already live.
+ */
+function describeUpdate(response, body) {
+  const version = body && body.version ? String(body.version) : ''
+  const at = version === '' ? '' : ` ${version}`
+  if (response && response.ok === true && body && body.ok === true) {
+    const application = String(body.application || '')
+    if (application === 'restart-required') {
+      return {
+        kind: 'ok',
+        text: `已更新到${at}，需要重启 Harness 生效 · Updated to${at}; restart DeepSeek Harness to apply it`,
+      }
+    }
+    if (application === 'applied') {
+      return { kind: 'ok', text: `已更新到${at}，已生效 · Updated to${at}, live now` }
+    }
+    if (application === 'cancelled') {
+      return { kind: 'error', text: '更新已取消，什么都没改 · Update cancelled; nothing was changed' }
+    }
+    if (application === 'failed') {
+      return {
+        kind: 'error',
+        text: `更新到${at}失败 · Update to${at} failed${body.error ? `：${body.error}` : ''}`,
+      }
+    }
+    const said = body.message || body.error
+    return { kind: 'ok', text: said ? String(said) : `更新已执行${at} · Update ran${at}` }
+  }
+  const said = body && (body.message || body.error)
+  const status = response && response.status ? `HTTP ${response.status}` : ''
+  return {
+    kind: 'error',
+    text: said ? String(said) : `更新没能执行（${status}）· The update did not run (${status})`,
+  }
 }
 
 function fillOf(node) {

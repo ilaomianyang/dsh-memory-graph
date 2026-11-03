@@ -30,6 +30,7 @@ import { createDistillHandler, DISTILL_PATH } from './src/distillapi.js'
 import { createPageHandler, PAGE_PATH } from './src/pageapi.js'
 import { createDistillRunner } from './src/distillrun.js'
 import { createAutoDistiller, registerAutoDistill } from './src/auto.js'
+import { createUpdateChecker, createUpdateHandler, UPDATE_PATH } from './src/update.js'
 import { extractorServices } from './src/extract.js'
 
 export const name = 'memory-graph'
@@ -133,7 +134,7 @@ export function apply(ctx, config) {
   })
 
   ctx.effect(() => {
-    const disposers = registerTools(ctx, { cfg, vault, redactor, runner })
+    const disposers = registerTools(ctx, { cfg, vault, redactor, runner, getUpdate: () => updates.peek() })
     log('info', `${disposers.length} memory tools registered`)
     return () => {
       for (const dispose of disposers) {
@@ -144,6 +145,32 @@ export function apply(ctx, config) {
         }
       }
     }
+  })
+
+  // Version and updates. `pluginManager` is read opportunistically: a profile
+  // without it (a headless composition, a test harness) still reports the version
+  // it is running, it just cannot install anything.
+  const pluginManager = () => {
+    try {
+      return ctx.get?.('pluginManager')
+    } catch {
+      return undefined
+    }
+  }
+  const updates = createUpdateChecker({ cfg, log, getPluginManager: pluginManager })
+
+  ctx.effect(() => {
+    // One check at startup — it is cached for `update.checkEveryHours` after this,
+    // so the cost is one request per day, not one per page load. With
+    // `autoInstall` on, a newer version is installed here, before any turn runs:
+    // the one moment where swapping the plugin cannot interrupt a conversation.
+    updates
+      .onStart()
+      .then((result) => {
+        if (result && typeof result.behind === 'boolean' && result.behind) log('info', `有新版本 ${result.latest}（当前 ${result.current}）`)
+      })
+      .catch(() => {})
+    return () => {}
   })
 
   // The automatic distiller: a tick that decides, never a timer that fires a run.
@@ -221,9 +248,21 @@ export function apply(ctx, config) {
         requestBody: 'buffered',
         fetch: createPageHandler({ getVault: () => vault }),
       })
-      log('info', `session memory view served at ${GRAPH_PATH}, distill at ${DISTILL_PATH}, vault graph page at ${PAGE_PATH}`)
+      // Version and updates. GET is a read (and the only method the page needs on
+      // load); POST is the one verb that can install a package, so a prefetch or a
+      // link preview can never trigger it.
+      const disposeUpdate = registry.register({
+        path: UPDATE_PATH,
+        methods: ['GET', 'POST'],
+        requestBody: 'buffered',
+        fetch: createUpdateHandler({ getChecker: () => updates }),
+      })
+      log(
+        'info',
+        `session memory view served at ${GRAPH_PATH}, distill at ${DISTILL_PATH}, vault graph page at ${PAGE_PATH}, update at ${UPDATE_PATH}`,
+      )
       return () => {
-        for (const dispose of [disposeRoute, disposeDistill, disposePage]) {
+        for (const dispose of [disposeRoute, disposeDistill, disposePage, disposeUpdate]) {
           try {
             dispose?.()
           } catch {

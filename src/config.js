@@ -114,6 +114,34 @@ const DEFAULTS = {
     quietHours: '',
     /** Project tag for automatic cards; empty uses the newest episode's project. */
     project: '',
+    /**
+     * Catch-up mode: instead of waiting for the schedule, keep running a batch
+     * every `catchUpEveryMinutes` while a full batch is still waiting — and stop
+     * at `maxBatchesPerDay`. This is what turns a backlog (an imported history,
+     * a week of sessions) into something that drains itself without a person
+     * pressing a button, while still capping what it can spend in one day.
+     */
+    catchUp: false,
+    /** Minutes between catch-up batches. */
+    catchUpEveryMinutes: 10,
+    /** Most automatic batches in one calendar day; 0 turns the daily cap off. */
+    maxBatchesPerDay: 6,
+  },
+
+  /**
+   * Update checking. The plugin asks the registry what the newest version is and
+   * compares it with the version it is running; it never installs unless asked
+   * (`autoInstall`) or a person presses the button. One HTTPS GET, no query
+   * string, nothing about the vault or the user in it.
+   */
+  update: {
+    enabled: true,
+    /** Hours a check result stays good for. */
+    checkEveryHours: 12,
+    /** Install a newer version at startup without being asked. */
+    autoInstall: false,
+    /** Registry to ask; empty uses the plugin manager's, then npm's own. */
+    registry: '',
   },
 }
 
@@ -241,6 +269,14 @@ export function resolveConfig(raw) {
   // A malformed window must not disable the rule or, worse, silence it forever:
   // parse what is parseable and fall back to "no quiet hours".
   cfg.auto.quietHours = parseQuietHours(cfg.auto.quietHours) === null ? '' : String(cfg.auto.quietHours).trim()
+  cfg.auto.catchUp = cfg.auto.catchUp === true
+  cfg.auto.catchUpEveryMinutes = int(cfg.auto.catchUpEveryMinutes, 10, 1, 1440)
+  cfg.auto.maxBatchesPerDay = int(cfg.auto.maxBatchesPerDay, 6, 0, 200)
+
+  cfg.update.enabled = cfg.update.enabled !== false
+  cfg.update.checkEveryHours = int(cfg.update.checkEveryHours, 12, 1, 24 * 30)
+  cfg.update.autoInstall = cfg.update.autoInstall === true
+  cfg.update.registry = String(cfg.update.registry || '').trim().replace(/\/+$/, '')
 
   return cfg
 }
@@ -276,5 +312,6 @@ export function paths(vaultDir) {
     audit: path.join(vaultDir, 'audit'),
     distillState: path.join(vaultDir, '.distill-state.json'),
     autoState: path.join(vaultDir, '.auto-state.json'),
+    updateState: path.join(vaultDir, '.update-state.json'),
   }
 }

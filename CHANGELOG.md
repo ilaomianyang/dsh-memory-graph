@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.12.0 — 2026-11-03
+
+装完之后就不用再管它了：插件自己去问有没有新版本，积压的记忆自己一批批追平，视图跟着库走。
+
+**Added**
+
+- **自我更新**。设置页最上面一行「版本与更新」：当前版本、检查更新、立即更新。启动时查一次，之后每 `update.checkEveryHours` 小时（默认 12）最多一次——一次 `GET <registry>/@ilaomianyang%2fdsh-memory-graph/latest`，不带查询串、不带记忆库路径、不带任何对话内容；结果缓存进库里的 `.update-state.json`，离线时保留上一次的答案，不会把"查不到"显示成"已是最新"。
+- 安装走宿主自己的 `pluginManager.installBundle`（和 `dsh plugin` 同一条 pnpm 路径，尊重已配的 registry），装完照实说「需要重启 Harness 生效」还是「已生效」。**`link:` / `file:` 本地安装一律拒绝**，并说明会覆盖开发目录——这句是拒绝，不是报错。
+- `update.autoInstall`（默认关）：启动时发现新版本就自己装。它在任何对话开始之前动手，是唯一"换掉插件不会打断你正在说的话"的时刻；`link:` 安装同样拒绝。`memory_stats` 也报一行版本。
+- 新路由 `/api/memory-graph.update`：GET 读状态（`current/latest/behind/canInstall/installKind/busy/message`），POST 是唯一能装的方法，所以页面加载或预取永远不会误装。
+- **追平模式**（`auto.catchUp`，默认关）。原来的两条规则一次只消化一批，两千条积压要等几十天；打开追平后，只要还攒着**一整批**（≥ `maxEpisodesPerRun`）就按自己的节奏（`catchUpEveryMinutes`，默认 10 分钟）一批批蒸下去，一天最多 `auto.maxBatchesPerDay` 批（默认 6，0 = 不限），追平就自己停。每日批次计数存进 `.auto-state.json` 的 `batchDay`/`batchesToday`，重启不重置；批次在调用**之前**就计数，失败也算用掉一个名额——上限才是真的上限。静默时段压过追平。
+- `memory_backfill` 写完后顺手重画 `README.md` 和 `graph.html`（报告里 `refreshed`），导入两千条情节后打开视图看到的是当下的库，不是导入前的空图。
+- `test/update.mjs` 27 项 + `test/auto.mjs` 加 6 项追平检查。检查数 244 → 277。
+
+**Changed**
+
+- 设置页多了 7 个旋钮：`auto.catchUp` / `auto.catchUpEveryMinutes` / `auto.maxBatchesPerDay`，以及新的「版本与更新」分区（`update.enabled` / `checkEveryHours` / `autoInstall` / `registry`）。版本那一行不是 config 字段，是这一块自己 GET/POST 出来的 UI，刻意不占 `mg-card` / `mg-row` 这些类名。
+- `README.md` / `README.en.md`：「自动蒸馏」从两条规则写成三条，新增「它自己更新」一节，配置表 34 → 41 行，YAML 例子带上 `auto.catchUp` 与 `update`。
+
 ## 0.11.0 — 2026-11-03
 
 历史会话也能进库了，宿主侧的文案统一成中文。

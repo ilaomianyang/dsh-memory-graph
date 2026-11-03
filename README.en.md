@@ -96,6 +96,23 @@ After the restart it is **Settings → Memory Graph**, between Models and Plugin
 
 Uninstall with `plugin_manager action=remove_bundle target="@ilaomianyang/dsh-memory-graph"`. The vault is not touched — it lives in `~/dsh-memory`, independent of the plugin.
 
+## It updates itself
+
+The copy installed from npm gets a **Version & updates** row at the top of its Settings page: the version you are running, **Check**, and **Update**.
+
+![Version & updates in Settings: the current version, Check, Update, then four switches](docs/update-settings.png)
+
+That is the real page (on a development machine the install is a `link:`, so Update is greyed out and says why next to it): the version, whether it is current, which registry, when it last checked — and the four `update.*` switches below.
+
+- It checks once at startup, then at most every `update.checkEveryHours` hours (default 12). The request is one `GET` of `<registry>/@ilaomianyang%2fdsh-memory-graph/latest` — no query string, no vault path, no conversation content. The answer is cached in the vault's `.update-state.json`, so an offline machine keeps the last answer instead of showing "could not check" as "up to date".
+- Nothing is installed until you press Update. Installation goes through the host's own `pluginManager.installBundle` — the same path `dsh plugin` and the plugin manager use — so it respects your configured registry instead of inventing a second package manager.
+- **A `link:` install is refused**, and the refusal is a sentence rather than an error: "updating would overwrite your working copy". For a clone, updating is `git pull` and a reload, as above.
+- An install usually needs a Harness restart (same caching reason as `client.js` / `package.json`). The page says **restart Harness to apply** rather than pretending it is already running the new code.
+- `update.autoInstall` (off by default) installs a newer version at startup without being asked. It acts before any conversation starts, which is the one moment swapping the plugin cannot interrupt something you were saying. A `link:` install is still refused.
+- `memory_stats` reports the version too, so the model does not have to guess which copy it is talking to.
+
+Turn `update.enabled` off to stop it going online entirely: after that it sends nothing, and the page only shows the current version.
+
 ## What you get on disk
 
 ```
@@ -145,6 +162,13 @@ One file is one memory. Append-only. No binaries, no lockfiles. Run `git init` i
     retrieval:
       limit: 8
       hops: 1
+    auto:
+      enabled: true
+      catchUp: true             # drain a backlog, one batch at a time
+      maxBatchesPerDay: 6
+    update:
+      enabled: true             # check for a newer version at startup
+      autoInstall: false
 ```
 
 | Key | Default | Meaning | On the page |
@@ -183,37 +207,52 @@ One file is one memory. Append-only. No binaries, no lockfiles. Run `git init` i
 | `auto.minGapMinutes` | `30` | shared by both rules: minimum gap between two automatic runs | ✓ |
 | `auto.quietHours` | `''` | window in which nothing runs (e.g. `23:00-08:00`, may cross midnight) | ✓ |
 | `auto.project` | `''` | project automatic cards are filed under | ✓ |
+| `auto.catchUp` | `false` | catch-up: keep running batches while a full batch is still waiting | ✓ |
+| `auto.catchUpEveryMinutes` | `10` | minutes between catch-up batches (its own cadence) | ✓ |
+| `auto.maxBatchesPerDay` | `6` | most automatic batches per day, 0 lifts the cap; the one ceiling on automatic spending | ✓ |
+| `update.enabled` | `true` | ask npm for a newer version regularly (checks only, nothing about the vault leaves) | ✓ |
+| `update.checkEveryHours` | `12` | how long a check result stays good for | ✓ |
+| `update.autoInstall` | `false` | install a newer version at startup (a `link:` install is refused) | ✓ |
+| `update.registry` | `''` | which npm registry to ask; empty = the harness's, then npmjs | ✓ |
 | `retrieval.limit` | `8` | how many cards one search returns | ✓ |
 | `retrieval.hops` | `1` | entity expansion depth, `0` = keyword only | ✓ |
 | `retrieval.snippetChars` | `320` | how much of each hit the model gets to read | ✓ |
 | `retrieval.timelineLimit` | `20` | how far back `memory_timeline` looks by default | ✓ |
 
-Why only those 34 are editable there: the harness projects **only fields declared `volatile`** — the ones read each time they are used. Everything marked ✓ is read at call time, so one save changes the next call. `enabled` / `vaultDir` / `defaultProject` / `crossProject` are consumed during activation and would need a remount, so they are left out rather than shown as knobs that do nothing; the page's footer says exactly that.
+Why only those 41 are editable there: the harness projects **only fields declared `volatile`** — the ones read each time they are used. Everything marked ✓ is read at call time, so one save changes the next call. `enabled` / `vaultDir` / `defaultProject` / `crossProject` are consumed during activation and would need a remount, so they are left out rather than shown as knobs that do nothing; the page's footer says exactly that.
 
-### When it distils on its own: two rules
+### When it distils on its own: three rules
 
 By default it does **not**. With `auto.enabled` on, the plugin looks once a minute at whether a run is due — and that look is arithmetic only (how many episodes are waiting, how long since the last attempt, is this a quiet hour). **No model call, no cost.** Only a rule that matches starts a run, and it runs the same `distill()`.
 
-The two rules are independent: either one alone, or both.
+The three rules are independent: any one alone, or all of them.
 
 | Rule | Setting | Fires when |
 | --- | --- | --- |
 | Distil once enough pile up | `auto.minEpisodes` | undistilled episodes ≥ this number (say 10) |
 | Distil on a schedule | `auto.everyMinutes` | this many minutes have passed since the last automatic run (1440 = daily) |
+| Catch up | `auto.catchUp` | a **full batch** is still waiting (≥ `maxEpisodesPerRun`): run batch after batch, `auto.catchUpEveryMinutes` apart (default 10), at most `auto.maxBatchesPerDay` batches a day (default 6, 0 lifts the cap) |
 
-Three gates both rules share:
+Catch-up is for a **backlog** — an imported history, a week away from the machine, two thousand undistilled episodes. The other two rules digest one batch per trigger and would take dozens of days; catch-up keeps going until less than a batch is left, then goes quiet.
 
-- `auto.minGapMinutes` (default 30): never two automatic runs closer than this. It is checked before the rules — a vault that just crossed the threshold should not be asked again a minute later, and every ask costs money.
-- `auto.quietHours` (default empty): nothing runs inside this window; it may cross midnight (`23:00-08:00`). Unreadable text is ignored rather than silencing the feature forever.
+- It has **its own cadence** (`catchUpEveryMinutes`) and is not held back by `minGapMinutes`; the other two rules still are.
+- `maxBatchesPerDay` is the only knob that puts a **ceiling on automatic spending**: the default six batches is about 240 episodes a day. Raise it to drain faster, or set `quietHours` so it does not run at night.
+- An interrupted catch-up (restart, shutdown, another run holding the lock) loses nothing: the counter lives in `.auto-state.json`, the next interval continues, and nothing already distilled is distilled twice.
+- 2080 episodes at the defaults: six batches a day × 40 episodes ≈ nine days. Set the cap to 50 to finish in a day.
+
+Three gates the rules share:
+
+- `auto.minGapMinutes` (default 30): the two **non-catch-up** rules never fire closer than this. It is checked before them — a vault that just crossed the threshold should not be asked again a minute later, and every ask costs money.
+- `auto.quietHours` (default empty): nothing runs inside this window; it may cross midnight (`23:00-08:00`). Unreadable text is ignored rather than silencing the feature forever. Catch-up obeys it too.
 - `auto.project` (default empty): which project automatic cards are filed under; empty uses the newest episode's project.
 
 A few deliberate choices:
 
 - **The schedule clock starts when you switch it on**: it does not run on the spot — a daily schedule should not spend the moment you flip the switch. That clock is stored separately (`startedAt`) and is not treated as "the last run", so it does not push the threshold rule back by one minimum gap either.
-- **The gap is armed before the call**, so a run that produced nothing still counts and will not be re-asked the next minute. It is recorded in `.auto-state.json` in the vault (`lastAttemptAt` only), so **a restart does not reset it**.
+- **The gap is armed before the call**, so a run that produced nothing still counts and will not be re-asked the next minute. The catch-up counter works the same way: it is incremented before the call, so a failed batch still spends its slot and the daily cap stays a real cap. Both live in `.auto-state.json` in the vault (`lastAttemptAt`, `startedAt`, `batchDay`, `batchesToday`), so **a restart does not reset them**.
 - That file is not `.distill-state.json`: the latter is the **cursor** (which lines have been read), the former is the **attempt clock**. Merging them would make "read, but produced nothing" impossible to express.
 - Automatic runs, the button and `memory_distill` share **one lock**: while a run is in flight, the other callers are told so rather than queued, so two of them can never spend at once.
-- To stop it: `auto.enabled = false` (master switch), or set both rules to 0 (the switch stays on, no rule matches, nothing runs).
+- To stop it: `auto.enabled = false` (master switch), or set the rules to 0 (the switch stays on, nothing matches, nothing runs).
 
 ![Automatic distillation in Settings: the switch, the two rules, the minimum gap, quiet hours and the project](docs/auto-settings.png)
 
@@ -289,7 +328,7 @@ memory_backfill {dryRun: true}     → 133 sessions scanned / 2078 episodes woul
 memory_backfill {dryRun: false}    → 2078 episodes written; 85 already present, skipped
 ```
 
-What lands is **episodes**, not cards: distil once (`memory_distill`, the Settings button, or the daily auto run at 40 episodes a batch) and they enter the retrieval layer. Two thousand episodes is fifty model batches — that is a spend worth deciding on deliberately.
+What lands is **episodes**, not cards: distil once (`memory_distill`, the Settings button, or the daily auto run at 40 episodes a batch) and they enter the retrieval layer. Two thousand episodes is fifty model batches — that is a spend worth deciding on deliberately, and if you would rather have it drain itself, switch on `auto.catchUp`: it runs at most `auto.maxBatchesPerDay` batches a day and stops when it has caught up. A backfill also re-renders `README.md` and `graph.html` when it finishes, so those two files show the vault as it is now rather than as it was before the import.
 
 A session file is a **concatenated zstd container** (one frame per appended batch), so reading it means cutting it frame by frame — `src/history.js` carries a scanner equivalent to the one the harness itself uses.
 
@@ -404,7 +443,7 @@ Side benefit: an injected message no longer cuts a turn in half, so an episode's
 No network, no real vault:
 
 ```bash
-npm test        # 43 + 13 + 35 + 12 + 22 + 54 + 15 + 8 + 11 + 19 + 12 = 244 checks, plus the 25-question retrieval eval
+npm test        # 43 + 13 + 35 + 12 + 22 + 54 + 15 + 8 + 11 + 25 + 12 + 27 = 277 checks, plus the 25-question retrieval eval
 npm run eval    # retrieval eval only (offline, deterministic)
 ```
 
@@ -416,7 +455,8 @@ npm run eval    # retrieval eval only (offline, deterministic)
 - `test/tools.mjs` — runs `execute` + `render` for all nine tools
 - `test/page.mjs` — the route behind the sidebar panel: `/api/memory-graph.page` sits on the authenticated channel, an empty vault still answers with a page, it is **the same renderer as the `graph.html` on disk** (only the timestamp differs), `X-Frame-Options: SAMEORIGIN` so only the app can frame it, a broken vault prints the reason on the page (escaped), no vault at all is a 500 rather than a crash, and no vault path ever appears in the bytes
 - `test/distillapi.mjs` — the Distill now door: `/api/memory-graph.distill` on the authenticated `/api` channel, running the same `distill()` (live vault, the model selected in Settings, the live redaction rules), one press is one run, a concurrent second press is refused instead of queued, an extractor refusal is a 200 and not a 500, a throw is a 500 with the lock still released, views are re-rendered only when cards were written, a render failure only warns, the card list is capped at 40, and a route with no runner answers 500 instead of throwing at the browser
-- `test/auto.mjs` — the automatic distiller: each rule fires on its own, whichever matches first runs when both are on, the minimum gap is checked before the rules, a quiet window may cross midnight, a tick only decides (an off switch does not even read the vault), one tick is at most one run, the gap is armed before the call, a restart reads `.auto-state.json` instead of starting over, a run that wrote nothing still arms the gap, an in-flight run is not stacked on, failures are logged with their reason, the project reaches the run, an unreadable vault is a skip and not a crash, and the tick asks for enough episodes to see the threshold
+- `test/auto.mjs` — the automatic distiller: each rule fires on its own, whichever matches first runs when both are on, the minimum gap is checked before the rules, a quiet window may cross midnight, a tick only decides (an off switch does not even read the vault), one tick is at most one run, the gap is armed before the call, a restart reads `.auto-state.json` instead of starting over, a run that wrote nothing still arms the gap, an in-flight run is not stacked on, failures are logged with their reason, the project reaches the run, an unreadable vault is a skip and not a crash, and the tick asks for enough episodes to see the threshold; catch-up gets its own group: less than a full batch is not a backlog, it keeps its own ten-minute cadence instead of the minimum gap, it stops at the daily cap and starts again the next day
+- `test/update.mjs` — self-update: version comparison (a prerelease sorts below its release, a `v` prefix is ignored), a `link:`/`file:` install is recognised as a working copy and therefore refuses to update itself, the registry version and the status line in prose, one registry request inside the window, `force` does not re-ask within a minute, the cache expires on its own, an outage keeps the last answer instead of claiming "up to date", turning checks off sends nothing, a configured registry wins over the host's, an unusable plugin manager does not stop the check, installing asks for the exact version through `installBundle`, applied / restart-required / failed each read differently, a second install while one runs is refused rather than queued, `autoInstall` acts only when allowed and only on a registry install, and the route layer: GET is uncached, POST is the only verb that can install, no checker is a 503
 - `test/extract.mjs` — the extractor: `fetch` stubbed for the http route (prompt construction, key resolution order, tolerant JSON parsing, per-card project attribution, cursor advance, dry run writing nothing, secrets stopped before the write), then a fake `llm` service for the harness route (borrows the Settings model and thinking level, honours an explicit override, explains a missing selection, handles every terminal `finish`, reports cancellation, rejects an empty completion, and never touches `fetch`), and finally batching: the batch size derived from the output budget, a long backlog split across calls, a truncated batch halved and retried, earlier batches kept when a later one fails, and `dryRun` previewing only the first batch
 
 Two suites do touch the network (and cost money), so they are not in `npm test`:
@@ -443,7 +483,7 @@ The tag triggers `.github/workflows/publish.yml`, which does four things:
 
 1. checks that the tag and `package.json` agree — a mismatch fails instead of publishing a package whose version lies;
 2. checks whether that version is already on the registry — if so it skips, so re-running a tag is a no-op rather than an error;
-3. `npm publish --provenance --access public` (`prepublishOnly` runs the 244 checks again; a red build cannot reach the registry);
+3. `npm publish --provenance --access public` (`prepublishOnly` runs the 277 checks again; a red build cannot reach the registry);
 4. adds "Built and signed on GitHub Actions" to the npm page, proving the tarball came from this commit of this repository.
 
 Two ways to authenticate; the workflow accepts both (it uses `NPM_TOKEN` when the secret exists and falls back to OIDC when it does not):

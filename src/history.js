@@ -421,6 +421,32 @@ export async function runBackfill({
     onProgress?.(report)
   }
 
+  // Views last, and only when something changed: `README.md` and `graph.html` are
+  // rendered from the cards, so an import that adds episodes but no cards changes
+  // nothing on either. The *reason* to do it here is that a backfill is the one
+  // operation that can add hundreds of episodes after the last render, and a stale
+  // view is indistinguishable from an empty vault when a person opens the file.
+  let refreshed = false
+  const previous = { readme: true, graph: true }
+  if (!dryRun && imported > 0) {
+    for (const [key, render] of [
+      ['readme', vault.regenerateReadme],
+      ['graph', vault.regenerateGraph],
+    ]) {
+      if (typeof render !== 'function') {
+        previous[key] = false
+        continue
+      }
+      try {
+        await render.call(vault)
+      } catch {
+        // A view that will not render must not lose the episodes that just landed.
+        previous[key] = false
+      }
+    }
+    refreshed = Object.values(previous).some(Boolean)
+  }
+
   return {
     dir,
     dryRun,
@@ -430,6 +456,7 @@ export async function runBackfill({
     imported,
     duplicates,
     exhausted,
+    refreshed,
     malformed: sessions.reduce((n, s) => n + s.malformed, 0),
     failed: sessions.filter((s) => s.failure !== null).length,
     ms: Date.now() - started,

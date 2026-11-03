@@ -321,7 +321,7 @@ await check('the page renders every knob the served value makes visible', () => 
   try {
     const expected = visibleFields(SERVED)
     // The harness route hides the seven http-only knobs and the provider field.
-    assert.equal(expected.length, 27, `expected 27 visible fields, spec says ${expected.length}`)
+    assert.equal(expected.length, 34, `expected 34 visible fields, spec says ${expected.length}`)
     for (const field of expected) {
       const key = field.path.join('.')
       assert.ok(control(instance.tree, key), `${key} has no control on the page`)
@@ -335,18 +335,18 @@ await check('the page renders every knob the served value makes visible', () => 
   }
 })
 
-await check('the five sections are all there, each with a title', () => {
+await check('the six sections are all there, each with a title', () => {
   const instance = render(makeForm(clone(SERVED)))
   try {
     const titles = byClass(instance.tree, 'mg-card-t').map(text)
-    assert.equal(titles.length, 5)
+    assert.equal(titles.length, 6)
     for (const title of titles) assert.ok(title.length > 0)
   } finally {
     instance.unmount()
   }
 })
 
-await check('the automatic distiller has both triggers on the page, each with its own switch', async () => {
+await check('the automatic distiller has its three rules on the page, each with its own switch', async () => {
   const form = makeForm(clone(SERVED))
   const instance = render(form)
   try {
@@ -354,7 +354,17 @@ await check('the automatic distiller has both triggers on the page, each with it
     assert.ok(section, 'automatic distillation needs a section of its own, not a corner of another one')
     assert.deepEqual(
       section.fields.map((field) => field.path.join('.')),
-      ['auto.enabled', 'auto.minEpisodes', 'auto.everyMinutes', 'auto.minGapMinutes', 'auto.quietHours', 'auto.project'],
+      [
+        'auto.enabled',
+        'auto.minEpisodes',
+        'auto.everyMinutes',
+        'auto.minGapMinutes',
+        'auto.quietHours',
+        'auto.project',
+        'auto.catchUp',
+        'auto.catchUpEveryMinutes',
+        'auto.maxBatchesPerDay',
+      ],
     )
     // Both rules show as 0 — "this rule is off" — rather than as a blank.
     assert.equal(control(instance.tree, 'auto.minEpisodes').props.value, '0')

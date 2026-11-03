@@ -260,7 +260,7 @@ export function createVault(cfg, redactor) {
       // The vault is plain text so the owner can version it themselves; keep the
       // OS junk and the per-machine distillation cursors out of that repo.
       if (!(await exists(P.gitignore))) {
-        await writeAtomic(P.gitignore, '*.tmp\n.DS_Store\nThumbs.db\n.distill-state.json\n')
+        await writeAtomic(P.gitignore, '*.tmp\n.DS_Store\nThumbs.db\n.distill-state.json\n.auto-state.json\n.update-state.json\n')
       }
     })()
     return ready

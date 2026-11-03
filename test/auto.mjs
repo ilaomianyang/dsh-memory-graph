@@ -125,6 +125,74 @@ await check('a threshold with no clock still fires at once: that rule is the pil
   assert.equal(calls.length, 1)
 })
 
+/* -------------------------------------------------------------- catch-up */
+
+const CATCH_UP = { ...AUTO, enabled: true, minEpisodes: 0, everyMinutes: 0, minGapMinutes: 30, catchUp: true, catchUpEveryMinutes: 10, maxBatchesPerDay: 3 }
+
+await check('catch-up is off unless asked for: a full batch is not a queue', () => {
+  const base = { auto: { ...AUTO, minEpisodes: 0, everyMinutes: 0 }, now: 5_000_000, lastAttemptAt: null, pending: 500, batchSize: 40 }
+  assert.equal(autoDecision(base).due, false)
+})
+
+await check('catch-up runs on its own cadence even though minGapMinutes is longer', async () => {
+  const { distiller, calls, clock } = makeDistiller({ auto: CATCH_UP, pending: 500 })
+  const first = await distiller.tick()
+  assert.equal(first.rule, 'catch-up', 'a backlog is due on the first tick')
+  assert.equal(first.batchesToday, 1)
+  assert.equal(calls.length, 1)
+  clock.at += 5 * MINUTE
+  const tooSoon = await distiller.tick()
+  assert.equal(tooSoon.due, false, 'ten minutes is the catch-up cadence, five is not enough')
+  assert.match(tooSoon.reason, /catch-up gap/u)
+  clock.at += 6 * MINUTE
+  const again = await distiller.tick()
+  assert.equal(again.rule, 'catch-up')
+  assert.equal(again.batchesToday, 2)
+  assert.equal(calls.length, 2)
+})
+
+await check('catch-up stops at the daily cap and starts again the next day', async () => {
+  const { distiller, calls, clock, vault } = makeDistiller({ auto: CATCH_UP, pending: 500 })
+  for (let i = 0; i < 3; i += 1) {
+    assert.equal((await distiller.tick()).rule, 'catch-up')
+    clock.at += 11 * MINUTE
+  }
+  const capped = await distiller.tick()
+  assert.equal(capped.due, false)
+  assert.match(capped.reason, /上限 3/u)
+  assert.equal(calls.length, 3, 'three batches are the whole day')
+  assert.equal(vault.written.batchesToday, 3)
+
+  clock.at += 24 * 60 * MINUTE
+  const tomorrow = await distiller.tick()
+  assert.equal(tomorrow.rule, 'catch-up')
+  assert.equal(tomorrow.batchesToday, 1, 'a new day resets the counter')
+})
+
+await check('a pile smaller than one batch is not catch-up work', async () => {
+  const { distiller, calls } = makeDistiller({ auto: CATCH_UP, pending: 12 })
+  const decision = await distiller.tick()
+  assert.equal(decision.due, false, 'twelve episodes wait for a schedule or a threshold')
+  assert.equal(calls.length, 0)
+})
+
+await check('the daily counter is read back from the vault, not assumed to be zero', async () => {
+  const clock = { at: new Date(2026, 10, 3, 9, 0, 0).getTime() }
+  const state = { batchDay: '2026-11-03', batchesToday: 3, lastAttemptAt: clock.at - 20 * MINUTE }
+  const { distiller, calls } = makeDistiller({ auto: CATCH_UP, pending: 500, state, clock })
+  const decision = await distiller.tick()
+  assert.equal(decision.due, false, 'a restart must not hand out a fresh daily allowance')
+  assert.match(decision.reason, /上限 3/u)
+  assert.equal(calls.length, 0)
+})
+
+await check('quiet hours outrank catch-up', async () => {
+  const at = new Date(2026, 10, 3, 2, 0, 0).getTime()
+  const decision = autoDecision({ auto: { ...CATCH_UP, quietHours: '23:00-08:00' }, now: at, lastAttemptAt: null, pending: 500, batchSize: 40 })
+  assert.equal(decision.due, false)
+  assert.equal(decision.reason, 'quiet hours')
+})
+
 await check('both rules can be on: whichever is satisfied first runs', () => {
   const auto = { ...AUTO, minEpisodes: 10, everyMinutes: 60 }
   const now = 100 * MINUTE

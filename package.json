@@ -1,6 +1,6 @@
 {
   "name": "@ilaomianyang/dsh-memory-graph",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "type": "module",
   "author": "ISKING <admin@isking.cc>",
   "repository": {
@@ -48,7 +48,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/smoke.mjs && node test/schema.mjs && node test/client.mjs && node test/capture.mjs && node test/tools.mjs && node test/extract.mjs && node test/graphdata.mjs && node test/page.mjs && node test/distillapi.mjs && node test/auto.mjs && node test/history.mjs && node eval/run.mjs",
+    "test": "node test/smoke.mjs && node test/schema.mjs && node test/client.mjs && node test/capture.mjs && node test/tools.mjs && node test/extract.mjs && node test/graphdata.mjs && node test/page.mjs && node test/distillapi.mjs && node test/auto.mjs && node test/history.mjs && node test/update.mjs && node eval/run.mjs",
     "eval": "node eval/run.mjs",
     "live": "node test/live.mjs",
     "live:supersede": "node test/live-supersede.mjs",

@@ -57,6 +57,27 @@ function formatHits(hits) {
  */
 
 /** One line describing what a distill call would do right now, for memory_stats. */
+/**
+ * The version line for memory_stats.
+ *
+ * Deliberately silent about a newer version when the check has not run yet: "no
+ * news" must not read as "you are up to date", and a check is an outbound request
+ * that a person did not necessarily just make.
+ */
+function describeUpdate(getUpdate) {
+  if (typeof getUpdate !== 'function') return '版本 version: 更新检查不可用 · update check unavailable'
+  let state = null
+  try {
+    state = getUpdate()
+  } catch {
+    return '版本 version: 更新检查不可用 · update check unavailable'
+  }
+  if (state === null || typeof state !== 'object' || state.current === null) return '版本 version: 未知 · unknown'
+  const current = `版本 version: \`${state.current}\``
+  if (state.latest === null) return `${current} · 还没有检查过更新 · no update check yet`
+  if (state.latest === state.current) return `${current} · 已是最新 · latest`
+  return `${current} · 有新版本 \`${state.latest}\`（设置页可更新）· newer version available`
+}
 function describeExtractor(ctx, cfg) {
   if (!cfg.extractor.enabled) return 'extractor: off (nothing calls a model)'
   if (cfg.extractor.transport === 'http') {
@@ -73,7 +94,7 @@ function describeExtractor(ctx, cfg) {
   }
 }
 
-export function registerTools(ctx, { cfg, vault, redactor, runner = null }) {
+export function registerTools(ctx, { cfg, vault, redactor, runner = null, getUpdate = null }) {
   const disposers = []
 
   /**
@@ -525,6 +546,7 @@ export function registerTools(ctx, { cfg, vault, redactor, runner = null }) {
           describeExtractor(ctx, cfg),
           `privacy rules: ${stats.privacy.rules}`,
           `views: README.md and graph.html in the vault root (open the HTML directly, no server needed)`,
+          describeUpdate(getUpdate),
         ].join('\n')
         return { ...stats, text }
       },
@@ -575,6 +597,7 @@ export function registerTools(ctx, { cfg, vault, redactor, runner = null }) {
         }
         if (report.imported > 0 && !dryRun) {
           lines.push('这些情节还没有变成卡片：蒸馏一次（memory_distill 或设置页的「蒸馏一次」）才会进入检索层。')
+          if (report.refreshed === true) lines.push('README.md 和 graph.html 已经按新情节重画过一次。')
         }
         return { ...report, text: lines.join('\n') }
       },
