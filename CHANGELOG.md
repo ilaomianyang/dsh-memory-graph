@@ -10,6 +10,10 @@
 - `publishConfig.registry` 显式指向 `https://registry.npmjs.org/`。本机 npm 默认源是 npmmirror，镜像**只读**、不接受发布；不写死这一行，`npm publish` 会打到镜像上然后失败。
 - `scripts.prepublishOnly: npm test`：发布前跑那 231 项，免得发上去一个红的版本。
 
+**Fixed**
+
+- `test/page.mjs` 里那个「磁盘上的图和服务出来的图是同一份渲染」的检查是**会闪的**：页面里的 `generatedAt` 带的是本机时区偏移（`…T13:21:53+08:00`），而规范化用的正则只认结尾的 `Z`，所以两次渲染只要跨了一秒就报差异。第一次 `npm publish` 就是被它拦下来的（发布前跑测试是对的，错的是那条检查）。现在两种写法都认。
+
 **Added**
 
 - README 两版新增「从 npm 装」：`plugin_manager action=install_bundle target="@ilaomianyang/dsh-memory-graph"`，并给出国内走 `registry="https://registry.npmmirror.com/"` 的写法（镜像自动同步 npm，滞后几分钟到几小时）。

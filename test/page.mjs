@@ -64,7 +64,11 @@ await check('it is the same renderer the vault writes to disk', async () => {
   const handler = createPageHandler({ getVault: () => vault })
   const served = await (await handler()).text()
   // The timestamp differs between the two renders; everything structural must not.
-  const skeleton = (html) => html.replace(/<!--[^]*?-->/g, '').replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, 'T')
+  // It carries the host's offset (`…T13:21:53+08:00`), not `Z`, so the normalizer
+  // has to accept both — matching only `Z` made this check pass or fail depending
+  // on whether the two renders landed in the same second.
+  const skeleton = (html) =>
+    html.replace(/<!--[^]*?-->/g, '').replace(/\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:\d{2})/g, 'T')
   assert.equal(skeleton(served), skeleton(onDisk))
 })
 
