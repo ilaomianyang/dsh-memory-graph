@@ -164,6 +164,8 @@ const injections = [
   { source: { kind: 'skill-catalog', form: 'catalog' }, text: '<system-reminder>\nThe available skill catalog changed. This complete catalog replaces every earlier available-skills list in this session.\n</system-reminder>' },
   { source: { kind: 'user-approval' }, text: 'The approval policy changed from "ask" to "never" (changed by the user).' },
   { text: 'Current runtime context. This snapshot supersedes earlier runtime-context snapshots.' },
+  // The live bug: a runtime snapshot arriving tagged as if the person typed it.
+  { source: { kind: 'user' }, text: 'Current runtime context. This snapshot supersedes earlier runtime-context snapshots.' },
 ]
 for (const [i, { source, text }] of injections.entries()) {
   emit('session/event', session, {
@@ -220,6 +222,34 @@ check('an injected turn is dropped even when the model replied to it', () => {
   assert.equal(afterReal.some((l) => l.includes('收到，继续原来的工作')), false, afterReal.join('\n'))
 })
 
+/* A real message that carries a reminder keeps its own words: the block is
+   stripped, the message is not thrown away with it. */
+emit('session/event', session, {
+  type: 'user/message',
+  seq: 90,
+  time: Date.now(),
+  data: {
+    role: 'user',
+    content: [{ type: 'text', text: '<system-reminder>\nThe available skill catalog changed. This complete catalog replaces every earlier available-skills list in this session.\n</system-reminder>\n\n为什么以前的会话有些没有情节' }],
+    source: { kind: 'user' },
+  },
+})
+emit('session/event', session, {
+  type: 'assistant/message',
+  seq: 91,
+  time: Date.now(),
+  data: { turn: 31, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: '因为采集是从插件在场那一刻开始的。' }] }, stream: null },
+})
+emit('session/event', session, { type: 'turn/end', seq: 92, time: Date.now(), data: { turn: 31, reason: { kind: 'completed' } } })
+await new Promise((resolve) => setTimeout(resolve, 60))
+
+const afterReminder = await readLines()
+check('a reminder inside a real message is stripped, not the message', () => {
+  assert.equal(afterReminder.length, 5, String(afterReminder.length))
+  const last = JSON.parse(afterReminder[4])
+  assert.equal(last.user, '为什么以前的会话有些没有情节')
+  assert.equal(afterReminder[4].includes('skill catalog'), false)
+})
 check('disposing removes the listeners', () => {
   for (const item of dispose) item()
   assert.equal((handlers.get('session/event') ?? []).length, 0)

@@ -324,9 +324,18 @@ Matches become `[REDACTED]`. The audit log records **which rule fired, never the
 
 The harness delivers runtime snapshots, skill catalogs, sampled timestamps, approval notices and compaction checkpoints **disguised as user messages**. Those are not your words, and distilling them would manufacture memories out of nothing.
 
-So capture looks at `source.kind`: only `kind === 'user'` — the message you typed — opens an episode. Everything else is ignored, not even buffered. Logs from older harness versions carry no provenance, and there `capture.skipPatterns` is the text fallback.
+So capture checks **both**, and both must pass: `source.kind` (anything but `user` is dropped) and the `capture.skipPatterns` text rules.
+
+Why both, rather than provenance alone: provenance is not always right — a 1501-character image-tool briefing once sat in a real vault tagged `kind: 'user'`, and was stored as if the person had typed it. Provenance may only *add* a skip; it cannot veto the patterns.
+
+Delimited injections (`<system-reminder>…</system-reminder>`) are stripped before that decision, so a real message that carried one keeps what the person typed instead of being dropped whole.
 
 Side benefit: an injected message no longer cuts a turn in half, so an episode's boundary is the real turn boundary.
+
+#### Two known limits
+
+- **No backfill.** Capture starts the moment the plugin is present (the first episode in this vault is 2026-11-02 15:53, when it was first loaded). Older sessions have no episodes, and the plugin does not read historical session logs — memory grows from the moment you install it.
+- **Subagent sessions are captured too.** A subagent's opening prompt is stored as one episode (its project inferred from the cwd). Those are internal instructions, not your memories; there is no filter for them yet, so it shows up as one line of noise.
 
 ## Design decisions worth knowing
 
@@ -341,7 +350,7 @@ Side benefit: an injected message no longer cuts a turn in half, so an episode's
 No network, no real vault:
 
 ```bash
-npm test        # 43 + 13 + 32 + 11 + 22 + 54 + 11 + 19 = 205 checks, plus the 25-question retrieval eval
+npm test        # 43 + 13 + 32 + 12 + 22 + 54 + 15 + 11 + 19 = 221 checks, plus the 25-question retrieval eval
 npm run eval    # retrieval eval only (offline, deterministic)
 ```
 

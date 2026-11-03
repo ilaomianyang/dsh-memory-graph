@@ -83,6 +83,22 @@ export function registerCapture(ctx, { cfg, vault, redactor }) {
   /** True when the "user" side is really a harness injection, not a person typing. */
   const injected = (text) => text !== '' && compiledSkipRules().some((re) => re.test(text))
 
+  /**
+   * Delimited harness blocks come off before the patterns are consulted.
+   *
+   * They are the one kind of injection whose extent is knowable, so removing them
+   * keeps the person's own words when a real message happens to carry one — the
+   * alternative (dropping the whole message) loses the part that was worth
+   * keeping. Undelimited blocks (a runtime snapshot) are handled by the patterns.
+   */
+  function stripInjectedBlocks(text) {
+    return String(text ?? '')
+      .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, '')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+  }
+
   const idOf = (session) => String(session?.id ?? session?.header?.id ?? 'unknown')
 
   function bufferOf(session) {
@@ -167,15 +183,17 @@ export function registerCapture(ctx, { cfg, vault, redactor }) {
       if (type !== 'user/message' && type !== 'assistant/message' && type !== 'tool/result') return
 
       if (type === 'user/message') {
-        const text = eventText(event)
         // The harness delivers runtime snapshots, skill catalogs, sampled time,
         // approval notices and compaction checkpoints through the same channel as
-        // the person typing. `source.kind` tells them apart; older logs carry no
-        // provenance, so fall back to the text patterns. Only what the user
-        // actually said opens a memory episode.
+        // the person typing — and not always with a telling `source.kind`: a real
+        // runtime snapshot has arrived here tagged `user` (it was captured as if
+        // the person had typed it). So provenance can only *add* a skip, never
+        // veto the patterns; both are consulted, and delimited blocks come off
+        // first so a message that merely carried a reminder keeps its own words.
         const kind = event?.data?.source?.kind
-        const synthetic = typeof kind === 'string' ? kind !== 'user' : injected(text)
-        if (synthetic || text === '') return
+        const text = stripInjectedBlocks(eventText(event))
+        const synthetic = (typeof kind === 'string' && kind !== 'user') || text === '' || injected(text)
+        if (synthetic) return
 
         const id = idOf(session)
         const open = buffers.get(id)

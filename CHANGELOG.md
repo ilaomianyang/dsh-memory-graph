@@ -19,8 +19,12 @@
 
 - `src/distillapi.js` 只负责把报告翻成 HTTP 状态；锁和报告挪进 `src/distillrun.js`。
 - `memory_distill` 的 `execute` 优先走 runner（`registerTools` 新增可选 `runner`），所以模型要的那次蒸馏不会和一次自动蒸馏撞在一起；`dryRun` 与取消信号照样透传。
-- 测试：`test/client.mjs` 31 → 32、`test/tools.mjs` 21 → 22、`test/distillapi.mjs` 9 → 11、新增 `test/auto.mjs` 19 项，合计 **205** 项。`test/schema.mjs` 的 volatile 叶子数改成"等于页面字段表"，多一格少一格都失败。
+- 测试：`test/client.mjs` 31 → 32、`test/tools.mjs` 21 → 22、`test/distillapi.mjs` 9 → 11、新增 `test/auto.mjs` 19 项、`test/capture.mjs` 11 → 12 项，合计 **221** 项。`test/schema.mjs` 的 volatile 叶子数改成"等于页面字段表"，多一格少一格都失败。
 
+**Fixed**
+
+- 采集会把宿主的 runtime 快照当成你说的话记下来——实测库里就躺着一条 1501 字的图像工具说明，被 1500 字上限截断后当成一轮对话。原因是"这是不是人说的"只看 `source.kind`，而这条快照带的正是 `user`。现在来源只能**增加**跳过，不能否决文本规则，两条都过；判断之前先剥掉 `<system-reminder>…</system-reminder>` 这种有边界的块，所以一条真消息里带了提醒时，剥完留下你的原话，而不是整条丢掉。
+- README 记下两个已知限制：采集不回溯（老会话没有情节，因为它只从插件在场那一刻开始），以及子智能体的开场提示词也会被当成一条情节（还没过滤）。
 **Note**
 
 - 默认仍然是**关**。这不是保守，是定价：一次蒸馏是一次真模型调用，什么时候花这笔钱应该是用户的决定，不是插件的。
