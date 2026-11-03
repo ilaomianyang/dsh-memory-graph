@@ -2,7 +2,7 @@
 
 [English](README.en.md) · 中文
 
-[![test](https://github.com/ilaomianyang/dsh-memory-graph/actions/workflows/test.yml/badge.svg)](https://github.com/ilaomianyang/dsh-memory-graph/actions/workflows/test.yml)
+[![npm](https://img.shields.io/npm/v/@ilaomianyang/dsh-memory-graph?label=npm)](https://www.npmjs.com/package/@ilaomianyang/dsh-memory-graph) [![test](https://github.com/ilaomianyang/dsh-memory-graph/actions/workflows/test.yml/badge.svg)](https://github.com/ilaomianyang/dsh-memory-graph/actions/workflows/test.yml)
 
 给 DeepSeek Harness 的**长期联想记忆**插件。上下文压缩会把东西真的抹掉；这个插件在上下文之外留一层持久的、可读的、属于你自己的记忆。
 

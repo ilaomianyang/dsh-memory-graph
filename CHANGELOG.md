@@ -2,7 +2,7 @@
 
 ## 0.10.0 — 2026-11-03
 
-**发布到 npm**。`dsh-memory-graph` 这个名字在 npm 上已经被别人占了（maintainer `lilai123`，2026-11-01 发的 0.1.2，是个同名但不同的插件），所以换名发布。
+**已发布到 npm：`npm i @ilaomianyang/dsh-memory-graph`（0.10.0，2026-11-03）。** npmmirror 已同步，国内直接装。`dsh-memory-graph` 这个名字在 npm 上已经被别人占了（maintainer `lilai123`，2026-11-01 发的 0.1.2，是个同名但不同的插件），所以换名发布。
 
 **Changed**
 

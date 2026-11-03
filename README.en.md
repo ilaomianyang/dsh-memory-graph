@@ -2,7 +2,7 @@
 
 English · [中文](README.md)
 
-[![test](https://github.com/ilaomianyang/dsh-memory-graph/actions/workflows/test.yml/badge.svg)](https://github.com/ilaomianyang/dsh-memory-graph/actions/workflows/test.yml)
+[![npm](https://img.shields.io/npm/v/@ilaomianyang/dsh-memory-graph?label=npm)](https://www.npmjs.com/package/@ilaomianyang/dsh-memory-graph) [![test](https://github.com/ilaomianyang/dsh-memory-graph/actions/workflows/test.yml/badge.svg)](https://github.com/ilaomianyang/dsh-memory-graph/actions/workflows/test.yml)
 
 Long-term **associative memory** for [DeepSeek Harness](https://getartcraft.com) (DSH).
 
