@@ -425,7 +425,11 @@ The tag triggers `.github/workflows/publish.yml`, which does four things:
 3. `npm publish --provenance --access public` (`prepublishOnly` runs the 231 checks again; a red build cannot reach the registry);
 4. adds "Built and signed on GitHub Actions" to the npm page, proving the tarball came from this commit of this repository.
 
-It needs one secret in the repository: **Settings → Secrets and variables → Actions → New repository secret**, named `NPM_TOKEN`. The value has to be an **Automation** token (npmjs.com → Access Tokens → Generate New Token → Automation): with 2FA on the account, an ordinary Publish token is rejected with `403 ... two-factor authentication ... required to publish`, while an Automation token bypasses it by design. That token is for CI only — keep it out of `.npmrc`.
+Two ways to authenticate; the workflow accepts both (it uses `NPM_TOKEN` when the secret exists and falls back to OIDC when it does not):
+
+**1. Trusted publishing — recommended, no secret stored anywhere.** npm treats this as the intended path and is retiring 2FA-bypassing tokens for it (per npm's notice: account changes restricted from Aug 2026, direct publishing from Jan 2027). On the package page: **Package → Settings → Trusted publishing → Add a publisher → GitHub Actions**, repository `ilaomianyang/dsh-memory-graph`, workflow `publish.yml`, environment empty. CI then publishes as this run's OIDC identity and `--provenance` comes along for free.
+
+**2. `NPM_TOKEN` — works today, a stopgap.** npmjs.com → Access Tokens → Generate New Token, choose **Granular Access Token**: tick **Bypass two-factor authentication (2FA)**, set Permissions to **Read and write (publish and stage)** (if it offers a package picker, pick only this package), and do not leave the Expiration at the default 30 days. Then add it to the repository: Settings → Secrets and variables → Actions → New repository secret, named `NPM_TOKEN`. With 2FA on the account an ordinary Publish token is rejected with `403 ... two-factor authentication ... required to publish`; only the bypass one gets through. That token is for CI only — keep it out of `~/.npmrc`.
 
 To publish locally instead (no CI, or GitHub is unreachable that minute):
 

@@ -418,7 +418,11 @@ npm version minor -m "chore(release): v%s" && git push --follow-tags   # minor /
 3. `npm publish --provenance --access public`（`prepublishOnly` 会再跑一遍那 231 项，红的进不去）；
 4. npm 页面上多一条「Built and signed on GitHub Actions」，证明这个 tarball 是从这个仓库的这个提交构建的。
 
-需要在仓库里配一个 secret：**Settings → Secrets and variables → Actions → New repository secret**，名字 `NPM_TOKEN`。内容必须是 **Automation** 类型的 token（npmjs.com → Access Tokens → Generate New Token → Automation）：账号开了 2FA 时，普通的 Publish token 会被 `403 ... two-factor authentication ... required to publish` 挡回来，Automation token 天生绕过它。这个 token 只给 CI 用，不要写进 `.npmrc`。
+凭据有两条路，工作流两条都认（有 `NPM_TOKEN` 就用它，没有就走 OIDC）：
+
+**一、Trusted publishing——推荐，仓库里不存任何密钥。** npm 把这条当正路，同时正在把「绕过 2FA 的 token」收掉（npm 的公告：账号类操作 2026 年 8 月起限制，直接发布 2027 年 1 月起禁用）。在包页面上：**Package → Settings → Trusted publishing → Add a publisher → GitHub Actions**，repository 填 `ilaomianyang/dsh-memory-graph`，workflow 填 `publish.yml`，environment 留空。之后 CI 用这次运行的 OIDC 身份发布，`--provenance` 自动带上。
+
+**二、`NPM_TOKEN`——今天就能用，过渡方案。** npmjs.com → Access Tokens → Generate New Token，选 **Granular Access Token**：勾上 **Bypass two-factor authentication (2FA)**，Permissions 选 **Read and write (publish and stage)**（如果出现选包的地方，只勾这一个包），Expiration 别留默认的 30 天。然后加到仓库：Settings → Secrets and variables → Actions → New repository secret，名字 `NPM_TOKEN`。账号开着 2FA 时，普通的 Publish token 会被 `403 ... two-factor authentication ... required to publish` 挡回来，只有勾了 bypass 的发得出去。这个 token 只给 CI 用，别写进 `~/.npmrc`。
 
 不想等 CI、或者 GitHub 那一刻连不上，就在本地发：
 

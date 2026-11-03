@@ -29,7 +29,35 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
+      # Trusted publishing (OIDC) needs npm >= 11.5.1; node 22 ships npm 10.
+      - run: |
+          npm install -g npm@latest --no-audit --no-fund
+          npm --version
+
       - run: npm install --no-audit --no-fund
+
+      # Two ways to authenticate, in order of preference:
+      #   - trusted publishing: no secret at all, the registry trusts this
+      #     workflow's OIDC identity (configured on the package's npm page);
+      #   - NPM_TOKEN: a granular token with "bypass 2FA" checked. npm is
+      #     retiring those for direct publishing in Jan 2027, so it is the
+      #     fallback, not the goal.
+      # setup-node's registry-url writes an .npmrc with an empty ${NODE_AUTH_TOKEN}
+      # placeholder; with no token that placeholder makes npm fail before it
+      # would ever try OIDC, so point npm at our own file instead.
+      - name: authenticate
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          $rc = Join-Path $env:RUNNER_TEMP 'npmrc'
+          "registry=https://registry.npmjs.org/" | Out-File -Encoding utf8 $rc
+          if ($env:NODE_AUTH_TOKEN) {
+            "//registry.npmjs.org/:_authToken=$env:NODE_AUTH_TOKEN" | Out-File -Append -Encoding utf8 $rc
+            Write-Output "authenticating with the NPM_TOKEN secret"
+          } else {
+            Write-Output "no NPM_TOKEN — relying on trusted publishing (OIDC)"
+          }
+          "npm_config_userconfig=$rc" >> $env:GITHUB_ENV
 
       - name: the tag and package.json must agree
         if: startsWith(github.ref, 'refs/tags/v')
